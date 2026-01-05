@@ -1,88 +1,71 @@
-//
-//  ContentView.swift
-//  Recordio
-//
-//  Created by Lawrence Ling on 5/1/26.
-//
-
 import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
-
+    @EnvironmentObject var appState: AppState
+    @State private var selectedTab = 0
+    @State private var showingOnboarding = !AppState.shared.hasSeenOnboarding
+    @State private var showingRecording = false
+    
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
+        if showingOnboarding {
+            OnboardingView(isPresented: $showingOnboarding)
+        } else {
+            TabView(selection: $selectedTab) {
+                RecordingsListView()
+                    .tabItem {
+                        Label("Recordings", systemImage: "tray.fill")
                     }
-                }
-                .onDelete(perform: deleteItems)
-            }
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+                    .tag(0)
+                
+                RecordingViewWrapper()
+                    .tabItem {
+                        Label("Record", systemImage: "plus.circle.fill")
                     }
-                }
+                    .tag(1)
+                
+                SettingsView()
+                    .tabItem {
+                        Label("Settings", systemImage: "gearshape.fill")
+                    }
+                    .tag(2)
             }
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
+            .accentColor(.blue)
         }
     }
 }
 
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
+struct RecordingViewWrapper: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.managedObjectContext) private var viewContext
+    @State private var showingRecording = false
+    
+    var body: some View {
+        Button(action: { showingRecording = true }) {
+            VStack(spacing: 12) {
+                Image(systemName: "mic.circle.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.red)
+                
+                Text("Tap to Record")
+                    .font(.headline)
+                
+                Text("Create a new recording")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .fullScreenCover(isPresented: $showingRecording) {
+            RecordingView()
+                .environmentObject(appState)
+                .environment(\.managedObjectContext, viewContext)
+        }
+    }
+}
 
 #Preview {
-    ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+    ContentView()
+        .environmentObject(AppState.shared)
+        .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
 }

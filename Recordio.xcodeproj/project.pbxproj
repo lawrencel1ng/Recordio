@@ -398,6 +398,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Recordio uses Face ID to secure your recordings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Recordio can tag recordings with your location for easy organization.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recordio needs access to your microphone to record audio.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Recordio can save exported audio files to your photo library.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Recordio uses speech recognition to transcribe your recordings.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -442,6 +447,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Recordio uses Face ID to secure your recordings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Recordio can tag recordings with your location for easy organization.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Recordio needs access to your microphone to record audio.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Recordio can save exported audio files to your photo library.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Recordio uses speech recognition to transcribe your recordings.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
