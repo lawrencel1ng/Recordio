@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreData
 
 struct RecordingView: View {
     @StateObject private var audioEngine = AudioEngine.shared
@@ -401,45 +402,113 @@ struct RecordingView: View {
         }
     }
     
+    @AppStorage("autoEnhanceAudio") private var autoEnhanceAudio = false
+    @AppStorage("autoReduceNoise") private var autoReduceNoise = false
+    
     private func processRecording(url: URL) {
-        SpeakerDiarizationService.shared.processAudioFile(url) { result in
-            switch result {
-            case .success(let segments):
-                if appState.canAccess(feature: .aiSummaries) {
-                    TranscriptionService.shared.transcribeAudioFile(url, speakerSegments: segments) { transcriptionResult in
-                        switch transcriptionResult {
-                        case .success(let transcript):
-                            if let recording = recordingManager.recordings.first {
-                                recordingManager.updateRecording(recording, speakerSegments: segments, transcript: transcript)
-                                
-                                // Calculate analytics
-                                let wordCount = AnalyticsService.shared.calculateWordCount(in: transcript)
-                                let fillerCount = AnalyticsService.shared.countFillerWords(in: transcript)
-                                recordingManager.updateAnalytics(recording, wordCount: wordCount, fillerWordCount: fillerCount)
+        // Chain operations: Audio Processing -> Diarization -> Transcription -> Analytics
+        
+        func runDiarizationAndTranscription(on processedURL: URL) {
+            SpeakerDiarizationService.shared.processAudioFile(processedURL) { result in
+                switch result {
+                case .success(let segments):
+                    if appState.canAccess(feature: .aiSummaries) {
+                        TranscriptionService.shared.transcribeAudioFile(processedURL, speakerSegments: segments) { transcriptionResult in
+                            switch transcriptionResult {
+                            case .success(let transcript):
+                                if let recording = recordingManager.recordings.first {
+                                    recordingManager.updateRecording(recording, speakerSegments: segments, transcript: transcript)
+                                    
+                                    // Calculate analytics
+                                    let wordCount = AnalyticsService.shared.calculateWordCount(in: transcript)
+                                    let fillerCount = AnalyticsService.shared.countFillerWords(in: transcript)
+                                    recordingManager.updateAnalytics(recording, wordCount: wordCount, fillerWordCount: fillerCount)
+                                    
+                                    // Update audio URL if it changed during processing
+                                    if processedURL != url {
+                                        recording.audioURL = processedURL
+                                        try? viewContext.save()
+                                    }
+                                }
+                                isProcessing = false
+                                dismiss()
+                            case .failure:
+                                if let recording = recordingManager.recordings.first {
+                                    recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
+                                    if processedURL != url {
+                                        recording.audioURL = processedURL
+                                        try? viewContext.save()
+                                    }
+                                }
+                                isProcessing = false
+                                dismiss()
                             }
-                            isProcessing = false
-                            dismiss()
-                        case .failure:
-                            if let recording = recordingManager.recordings.first {
-                                // Don't overwrite existing transcript (from live transcription) with nil
-                                recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
-                            }
-                            isProcessing = false
-                            dismiss()
                         }
+                    } else {
+                        if let recording = recordingManager.recordings.first {
+                            recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
+                            if processedURL != url {
+                                recording.audioURL = processedURL
+                                try? viewContext.save()
+                            }
+                        }
+                        isProcessing = false
+                        dismiss()
                     }
-                } else {
-                    if let recording = recordingManager.recordings.first {
-                         // Don't overwrite existing transcript
-                        recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
-                    }
+                case .failure:
                     isProcessing = false
                     dismiss()
                 }
-            case .failure:
-                isProcessing = false
-                dismiss()
             }
+        }
+        
+        // Check for audio enhancements
+        if appState.canAccess(feature: .audioEnhancement) && autoEnhanceAudio {
+            AudioProcessor.shared.enhanceAudio(url: url) { result in
+                switch result {
+                case .success(let enhancedURL):
+                    // If noise reduction is also on
+                    if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
+                        AudioProcessor.shared.reduceNoise(url: enhancedURL) { nrResult in
+                            switch nrResult {
+                            case .success(let finalURL):
+                                runDiarizationAndTranscription(on: finalURL)
+                            case .failure:
+                                runDiarizationAndTranscription(on: enhancedURL)
+                            }
+                        }
+                    } else {
+                        runDiarizationAndTranscription(on: enhancedURL)
+                    }
+                case .failure:
+                    // If enhance failed, try noise reduction on original
+                    if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
+                        AudioProcessor.shared.reduceNoise(url: url) { nrResult in
+                            switch nrResult {
+                            case .success(let finalURL):
+                                runDiarizationAndTranscription(on: finalURL)
+                            case .failure:
+                                runDiarizationAndTranscription(on: url)
+                            }
+                        }
+                    } else {
+                        runDiarizationAndTranscription(on: url)
+                    }
+                }
+            }
+        } else if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
+            // Only noise reduction
+            AudioProcessor.shared.reduceNoise(url: url) { result in
+                switch result {
+                case .success(let finalURL):
+                    runDiarizationAndTranscription(on: finalURL)
+                case .failure:
+                    runDiarizationAndTranscription(on: url)
+                }
+            }
+        } else {
+            // No audio processing
+            runDiarizationAndTranscription(on: url)
         }
     }
 }
