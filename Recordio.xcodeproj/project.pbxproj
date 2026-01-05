@@ -119,6 +119,8 @@
 			);
 			name = Recordio;
 			packageProductDependencies = (
+				C00100022984100100650001 /* FirebaseAnalytics */,
+				C00100042984100100650001 /* FirebaseCrashlytics */,
 			);
 			productName = Recordio;
 			productReference = 1C14B4782F0AC7550057CF17 /* Recordio.app */;
@@ -206,7 +208,7 @@
 				C00100052984100100650001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 1C14B4792F0AC7550057CF17 /* Products */;*/;
+			productRefGroup = 1C14B4792F0AC7550057CF17 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
