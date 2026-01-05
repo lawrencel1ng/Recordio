@@ -2,6 +2,19 @@ import Foundation
 import AVFoundation
 import Speech
 
+// MARK: - Transcription Result
+
+struct TranscriptionResult {
+    let fullTranscript: String
+    let segmentTranscripts: [SegmentTranscript]
+}
+
+struct SegmentTranscript {
+    let speakerId: Int16
+    let text: String
+    let wordCount: Int
+}
+
 class TranscriptionService {
     static let shared = TranscriptionService()
     
@@ -39,7 +52,7 @@ class TranscriptionService {
     
     // MARK: - Transcription
     
-    func transcribeAudioFile(_ url: URL, speakerSegments: [SpeakerSegmentInfo], completion: @escaping (Result<String, Error>) -> Void) {
+    func transcribeAudioFile(_ url: URL, speakerSegments: [SpeakerSegmentInfo], completion: @escaping (Result<TranscriptionResult, Error>) -> Void) {
         guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
             completion(.failure(TranscriptionError.recognizerUnavailable))
             return
@@ -59,7 +72,7 @@ class TranscriptionService {
         performTranscription(url: url, speakerSegments: speakerSegments, completion: completion)
     }
     
-    private func performTranscription(url: URL, speakerSegments: [SpeakerSegmentInfo], completion: @escaping (Result<String, Error>) -> Void) {
+    private func performTranscription(url: URL, speakerSegments: [SpeakerSegmentInfo], completion: @escaping (Result<TranscriptionResult, Error>) -> Void) {
         AppLogger.shared.logEvent(AppLogger.Events.transcriptionStarted)
         
         let request = SFSpeechURLRecognitionRequest(url: url)
@@ -78,7 +91,7 @@ class TranscriptionService {
                     let nsError = error as NSError
                     if nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 1110 {
                         // No speech detected - return empty transcript
-                        completion(.success(""))
+                        completion(.success(TranscriptionResult(fullTranscript: "", segmentTranscripts: [])))
                     } else {
                         AppLogger.shared.logError(error, additionalInfo: ["context": "transcription"])
                         AppLogger.shared.logEvent(AppLogger.Events.transcriptionFailed, parameters: [
@@ -103,29 +116,56 @@ class TranscriptionService {
                     
                     // Format transcript with speaker labels if segments available
                     if !speakerSegments.isEmpty {
-                        let formattedTranscript = self?.formatWithSpeakers(
+                        let (formattedTranscript, segmentTranscripts) = self?.formatWithSpeakers(
                             transcript: fullTranscript,
                             segments: result.bestTranscription.segments,
                             speakerSegments: speakerSegments
-                        ) ?? fullTranscript
-                        completion(.success(formattedTranscript))
+                        ) ?? (fullTranscript, [])
+                        
+                        let transcriptionResult = TranscriptionResult(
+                            fullTranscript: formattedTranscript,
+                            segmentTranscripts: segmentTranscripts
+                        )
+                        completion(.success(transcriptionResult))
                     } else {
-                        completion(.success(fullTranscript))
+                        let transcriptionResult = TranscriptionResult(
+                            fullTranscript: fullTranscript,
+                            segmentTranscripts: []
+                        )
+                        completion(.success(transcriptionResult))
                     }
                 }
             }
         }
     }
     
-    private func formatWithSpeakers(transcript: String, segments: [SFTranscriptionSegment], speakerSegments: [SpeakerSegmentInfo]) -> String {
+    private func formatWithSpeakers(transcript: String, segments: [SFTranscriptionSegment], speakerSegments: [SpeakerSegmentInfo]) -> (String, [SegmentTranscript]) {
         guard !segments.isEmpty, !speakerSegments.isEmpty else {
-            return transcript
+            return (transcript, [])
         }
         
         var formattedTranscript = ""
+        var segmentTranscripts: [SegmentTranscript] = []
         var currentSpeaker: Int16 = -1
         var currentText = ""
         var currentTimestamp: Double = 0
+        
+        // Helper to save current speaker segment
+        func saveCurrentSegment() {
+            if !currentText.isEmpty {
+                let trimmedText = currentText.trimmingCharacters(in: .whitespaces)
+                let timestamp = formatTimestamp(currentTimestamp)
+                formattedTranscript += "[\(timestamp)] Speaker \(currentSpeaker + 1): \(trimmedText)\n\n"
+                
+                // Calculate word count for this segment
+                let words = trimmedText.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+                segmentTranscripts.append(SegmentTranscript(
+                    speakerId: currentSpeaker,
+                    text: trimmedText,
+                    wordCount: words.count
+                ))
+            }
+        }
         
         for segment in segments {
             let segmentTime = segment.timestamp
@@ -134,11 +174,8 @@ class TranscriptionService {
             let speaker = findSpeaker(for: segmentTime, in: speakerSegments)
             
             if speaker != currentSpeaker {
-                // Output previous speaker's text
-                if !currentText.isEmpty {
-                    let timestamp = formatTimestamp(currentTimestamp)
-                    formattedTranscript += "[\(timestamp)] Speaker \(currentSpeaker + 1): \(currentText.trimmingCharacters(in: .whitespaces))\n\n"
-                }
+                // Save previous speaker's segment
+                saveCurrentSegment()
                 
                 // Start new speaker section
                 currentSpeaker = speaker
@@ -149,13 +186,13 @@ class TranscriptionService {
             }
         }
         
-        // Output final speaker's text
-        if !currentText.isEmpty {
-            let timestamp = formatTimestamp(currentTimestamp)
-            formattedTranscript += "[\(timestamp)] Speaker \(currentSpeaker + 1): \(currentText.trimmingCharacters(in: .whitespaces))\n"
-        }
+        // Save final speaker's segment
+        saveCurrentSegment()
         
-        return formattedTranscript.isEmpty ? transcript : formattedTranscript
+        // Remove trailing newlines from formatted transcript
+        formattedTranscript = formattedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        return (formattedTranscript.isEmpty ? transcript : formattedTranscript, segmentTranscripts)
     }
     
     private func findSpeaker(for timestamp: Double, in segments: [SpeakerSegmentInfo]) -> Int16 {

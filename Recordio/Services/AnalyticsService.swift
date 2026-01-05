@@ -43,10 +43,33 @@ class AnalyticsService {
         }
         
         let totalSpeakingTime = speakerTimes.values.reduce(0, +)
-        let silenceTime = max(0, duration - totalSpeakingTime)
-        let silencePercentage = duration > 0 ? (silenceTime / duration) * 100 : 0
+        
+        // Only calculate silence if we have speaker segment data
+        let silencePercentage: Double
+        if segments.isEmpty {
+            silencePercentage = 0 // Can't determine silence without diarization data
+        } else {
+            let silenceTime = max(0, duration - totalSpeakingTime)
+            silencePercentage = duration > 0 ? (silenceTime / duration) * 100 : 0
+        }
         
         let speakerColors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
+        
+        // Calculate total words from segments
+        var totalWords = speakerWords.values.reduce(0, +)
+        
+        // Fallback: If no segment word counts, calculate from transcript
+        if totalWords == 0, let transcript = recording.transcript, !transcript.isEmpty {
+            totalWords = calculateWordCount(in: transcript)
+            
+            // Distribute words proportionally to speaking time if we have segments
+            if !segments.isEmpty && totalSpeakingTime > 0 {
+                for (speakerId, time) in speakerTimes {
+                    let proportion = time / totalSpeakingTime
+                    speakerWords[speakerId] = Int(Double(totalWords) * proportion)
+                }
+            }
+        }
         
         var speakerStats: [SpeakerStats] = []
         for (speakerId, time) in speakerTimes.sorted(by: { $0.key < $1.key }) {
@@ -64,9 +87,14 @@ class AnalyticsService {
             ))
         }
         
-        // Total stats
-        let totalWords = speakerWords.values.reduce(0, +)
-        let averageWPM = totalSpeakingTime > 0 ? Double(totalWords) / (totalSpeakingTime / 60.0) : 0
+        // Calculate average WPM - use speaking time if available, otherwise use total duration
+        let effectiveSpeakingTime = totalSpeakingTime > 0 ? totalSpeakingTime : duration
+        var averageWPM = effectiveSpeakingTime > 0 ? Double(totalWords) / (effectiveSpeakingTime / 60.0) : 0
+        
+        // Fallback to recording's stored WPM if calculated is zero
+        if averageWPM == 0 && recording.wordsPerMinute > 0 {
+            averageWPM = recording.wordsPerMinute
+        }
         
         let bookmarkCount = (recording.bookmarks as? Set<Bookmark>)?.count ?? 0
         
@@ -145,6 +173,9 @@ class AnalyticsService {
     }
     
     func detectSilences(in segments: [SpeakerSegment], totalDuration: Double, minSilenceDuration: Double = 3.0) -> [SilenceMarker] {
+        // If no segments, we can't detect silences (no timing data)
+        guard !segments.isEmpty else { return [] }
+        
         var silences: [SilenceMarker] = []
         
         let sortedSegments = segments.sorted { $0.startTime < $1.startTime }
@@ -158,8 +189,8 @@ class AnalyticsService {
             lastEndTime = max(lastEndTime, segment.endTime)
         }
         
-        // Check for silence at the end
-        if totalDuration - lastEndTime >= minSilenceDuration {
+        // Check for silence at the end (only if segments cover some of the recording)
+        if lastEndTime > 0 && totalDuration - lastEndTime >= minSilenceDuration {
             silences.append(SilenceMarker(startTime: lastEndTime, endTime: totalDuration))
         }
         

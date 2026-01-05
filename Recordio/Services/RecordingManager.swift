@@ -49,10 +49,17 @@ class RecordingManager: ObservableObject {
         return recording
     }
     
-    func updateRecording(_ recording: Recording, speakerSegments: [SpeakerSegmentInfo], transcript: String?) {
+    func updateRecording(_ recording: Recording, speakerSegments: [SpeakerSegmentInfo], transcript: String?, segmentTranscripts: [SegmentTranscript] = []) {
         recording.detectedSpeakers = Int16(Set(speakerSegments.map { $0.speakerId }).count)
         recording.transcript = transcript
         recording.isProcessed = true
+        
+        // Create a dictionary to quickly lookup segment transcripts by speakerId
+        var transcriptsBySegment: [String: SegmentTranscript] = [:]
+        for segmentTranscript in segmentTranscripts {
+            let key = "\(segmentTranscript.speakerId)"
+            transcriptsBySegment[key] = segmentTranscript
+        }
         
         for segmentInfo in speakerSegments {
             let segment = SpeakerSegment(context: context)
@@ -62,6 +69,13 @@ class RecordingManager: ObservableObject {
             segment.endTime = segmentInfo.endTime
             segment.confidence = segmentInfo.confidence
             segment.recording = recording
+            
+            // Populate transcript and word count if available
+            let key = "\(segmentInfo.speakerId)"
+            if let segmentTranscript = transcriptsBySegment[key] {
+                segment.transcript = segmentTranscript.text
+                segment.wordCount = Int32(segmentTranscript.wordCount)
+            }
         }
         
         saveContext()

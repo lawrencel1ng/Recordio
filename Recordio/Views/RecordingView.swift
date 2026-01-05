@@ -468,13 +468,18 @@ struct RecordingView: View {
                     if appState.canAccess(feature: .aiSummaries) {
                         TranscriptionService.shared.transcribeAudioFile(processedURL, speakerSegments: segments) { transcriptionResult in
                             switch transcriptionResult {
-                            case .success(let transcript):
+                            case .success(let result):
                                 if let recording = recordingManager.recordings.first {
-                                    recordingManager.updateRecording(recording, speakerSegments: segments, transcript: transcript)
+                                    recordingManager.updateRecording(
+                                        recording,
+                                        speakerSegments: segments,
+                                        transcript: result.fullTranscript,
+                                        segmentTranscripts: result.segmentTranscripts
+                                    )
                                     
-                                    // Calculate analytics
-                                    let wordCount = AnalyticsService.shared.calculateWordCount(in: transcript)
-                                    let fillerCount = AnalyticsService.shared.countFillerWords(in: transcript)
+                                    // Calculate analytics from full transcript
+                                    let wordCount = AnalyticsService.shared.calculateWordCount(in: result.fullTranscript)
+                                    let fillerCount = AnalyticsService.shared.countFillerWords(in: result.fullTranscript)
                                     recordingManager.updateAnalytics(recording, wordCount: wordCount, fillerWordCount: fillerCount)
                                     
                                     // Update audio URL if it changed during processing
