@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C00100012984100100650001 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = C00100022984100100650001 /* FirebaseAnalytics */; };
+		C00100032984100100650001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = C00100042984100100650001 /* FirebaseCrashlytics */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		1C14B48B2F0AC7580057CF17 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C00100012984100100650001 /* FirebaseAnalytics in Frameworks */,
+				C00100032984100100650001 /* FirebaseCrashlytics in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -195,8 +202,11 @@
 			);
 			mainGroup = 1C14B46F2F0AC7550057CF17;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				C00100052984100100650001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 1C14B4792F0AC7550057CF17 /* Products */;
+			productRefGroup = 1C14B4792F0AC7550057CF17 /* Products */;*/;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -586,6 +596,30 @@
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C00100052984100100650001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 10.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C00100022984100100650001 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C00100052984100100650001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		C00100042984100100650001 /* FirebaseCrashlytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C00100052984100100650001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCrashlytics;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		1C14B4732F0AC7550057CF17 /* Build configuration list for PBXProject "Recordio" */ = {

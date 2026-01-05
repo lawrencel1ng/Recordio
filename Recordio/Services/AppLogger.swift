@@ -1,7 +1,13 @@
 import Foundation
+#if canImport(FirebaseCore)
 import FirebaseCore
+#endif
+#if canImport(FirebaseAnalytics)
 import FirebaseAnalytics
+#endif
+#if canImport(FirebaseCrashlytics)
 import FirebaseCrashlytics
+#endif
 
 class AppLogger {
     static let shared = AppLogger()
@@ -9,13 +15,19 @@ class AppLogger {
     private init() {}
     
     func configure() {
+        #if canImport(FirebaseCore)
         FirebaseApp.configure()
+        #else
+        print("⚠️ [AppLogger] Firebase not imported. Logging is disabled.")
+        #endif
     }
     
     // MARK: - Events
     
     func logEvent(_ name: String, parameters: [String: Any]? = nil) {
+        #if canImport(FirebaseAnalytics)
         Analytics.logEvent(name, parameters: parameters)
+        #endif
         
         #if DEBUG
         print("📊 [Analytics] \(name): \(parameters ?? [:])")
@@ -25,6 +37,7 @@ class AppLogger {
     // MARK: - Errors
     
     func logError(_ error: Error, additionalInfo: [String: Any]? = nil) {
+        #if canImport(FirebaseCrashlytics)
         Crashlytics.crashlytics().record(error: error)
         
         if let info = additionalInfo {
@@ -32,6 +45,7 @@ class AppLogger {
             let customKeysAndValues = info.mapValues { "\($0)" }
             Crashlytics.crashlytics().setCustomKeysAndValues(customKeysAndValues)
         }
+        #endif
         
         #if DEBUG
         print("🔴 [Error] \(error.localizedDescription) - Info: \(additionalInfo ?? [:])")
@@ -39,12 +53,18 @@ class AppLogger {
     }
     
     func setUserID(_ userID: String) {
+        #if canImport(FirebaseAnalytics)
         Analytics.setUserID(userID)
+        #endif
+        #if canImport(FirebaseCrashlytics)
         Crashlytics.crashlytics().setUserID(userID)
+        #endif
     }
     
     func setCustomKey(_ key: String, value: Any) {
+        #if canImport(FirebaseCrashlytics)
         Crashlytics.crashlytics().setCustomValue(value, forKey: key)
+        #endif
     }
 }
 
