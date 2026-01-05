@@ -10,6 +10,7 @@ struct RecordingsListView: View {
     @State private var showingFolderSheet = false
     @State private var showingUpgradePrompt = false
     @State private var upgradePromptType: UpgradePromptType?
+    @State private var savedSearches: [String] = []
     
     enum UpgradePromptType: Identifiable {
         case speaker
@@ -44,7 +45,9 @@ struct RecordingsListView: View {
             recordings = recordings.filter { ($0.title ?? "").localizedCaseInsensitiveContains("lecture") }
         case .interviews:
             recordings = recordings.filter { ($0.title ?? "").localizedCaseInsensitiveContains("interview") }
-        case .favorites, .all, .none:
+        case .favorites:
+            recordings = recordings.filter { $0.tagsArray.contains("favorite") }
+        case .all, .none:
             break
         }
         
@@ -80,9 +83,17 @@ struct RecordingsListView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showingUpgradePrompt = true }) {
-                        Image(systemName: "crown.fill")
-                            .foregroundColor(appState.currentTier == .free ? .orange : .blue)
+                    HStack(spacing: 16) {
+                        if !searchText.isEmpty {
+                            Button(action: saveCurrentSearch) {
+                                Image(systemName: "bookmark.fill")
+                            }
+                            .help("Save search")
+                        }
+                        Button(action: { showingUpgradePrompt = true }) {
+                            Image(systemName: "crown.fill")
+                                .foregroundColor(appState.currentTier == .free ? .orange : .blue)
+                        }
                     }
                 }
             }
@@ -94,6 +105,7 @@ struct RecordingsListView: View {
             }
             .onAppear {
                 checkUpgradePrompts()
+                loadSavedSearches()
             }
         }
     }
@@ -122,6 +134,31 @@ struct RecordingsListView: View {
                         folder: folder,
                         action: { navigateToFolder(folder) }
                     )
+                }
+                
+                if !savedSearches.isEmpty {
+                    Divider()
+                    ForEach(savedSearches, id: \.self) { query in
+                        Button(action: { searchText = query }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "magnifyingglass")
+                                Text(query)
+                                    .lineLimit(1)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(.systemGray5))
+                            .cornerRadius(14)
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteSavedSearch(query)
+                            } label: {
+                                Label("Delete Saved Search", systemImage: "trash")
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal)
@@ -205,6 +242,27 @@ struct RecordingsListView: View {
                 await UpgradePromptManager.shared.markSpeakerPromptShown()
             }
         }
+    }
+    
+    private func saveCurrentSearch() {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        var set = Set(savedSearches)
+        if set.insert(q).inserted {
+            savedSearches = Array(set).sorted()
+            UserDefaults.standard.set(savedSearches, forKey: "savedSearches")
+        }
+    }
+    
+    private func loadSavedSearches() {
+        if let arr = UserDefaults.standard.array(forKey: "savedSearches") as? [String] {
+            savedSearches = arr
+        }
+    }
+    
+    private func deleteSavedSearch(_ q: String) {
+        savedSearches.removeAll { $0 == q }
+        UserDefaults.standard.set(savedSearches, forKey: "savedSearches")
     }
 }
 

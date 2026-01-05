@@ -7,6 +7,10 @@ struct AdvancedSettingsView: View {
     @AppStorage("enableTimestamps") private var enableTimestamps = true
     @AppStorage("noiseGateThreshold") private var noiseGateThreshold = 0.02
     @AppStorage("compressionRatio") private var compressionRatio = 4.0
+    @AppStorage("advancedDiarizationEnabled") private var advancedDiarizationEnabled = false
+    @State private var isDownloadingPack = false
+    @State private var downloadError: String?
+    @State private var isPackInstalled = false
     
     let languages = [
         ("en-US", "English (US)"),
@@ -22,6 +26,44 @@ struct AdvancedSettingsView: View {
     
     var body: some View {
         Form {
+            if appState.canAccess(feature: .advancedSpeakerDiarization) {
+                Section {
+                    Toggle("Advanced Speaker Separation", isOn: $advancedDiarizationEnabled)
+                        .disabled(!isPackInstalled)
+                    HStack {
+                        Button("Download Advanced Speaker Pack") {
+                            isDownloadingPack = true
+                            SpeakerDiarizationService.shared.downloadAdvancedPack { result in
+                                isDownloadingPack = false
+                                if case .failure(let error) = result {
+                                    downloadError = error.localizedDescription
+                                } else {
+                                    isPackInstalled = SpeakerDiarizationService.shared.isAdvancedPackInstalled()
+                                }
+                            }
+                        }
+                        .disabled(isDownloadingPack)
+                        if isDownloadingPack {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        }
+                        Spacer()
+                        Text(isPackInstalled ? "Installed" : "Not installed")
+                            .foregroundColor(isPackInstalled ? .green : .secondary)
+                        if let downloadError {
+                            Text(downloadError)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                } header: {
+                    Text("Premium+ Features")
+                } footer: {
+                    Text("Improves diarization and speaker-aware transcription accuracy")
+                }
+            }
             Section {
                 Picker("Transcription Language", selection: $transcriptionLanguage) {
                     ForEach(languages, id: \.0) { code, name in
@@ -98,11 +140,15 @@ struct AdvancedSettingsView: View {
         }
         .navigationTitle("Advanced")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            isPackInstalled = SpeakerDiarizationService.shared.isAdvancedPackInstalled()
+        }
     }
 }
 
 struct DataStorageView: View {
     @State private var storageUsed: String = "Calculating..."
+    @State private var showingDeleteConfirm = false
     
     var body: some View {
         Form {
@@ -125,14 +171,10 @@ struct DataStorageView: View {
             }
             
             Section {
-                Button("Clear Processed Files") {
-                    // Clear cached processed files
-                }
+                Button("Clear Processed Files") { clearProcessedFiles() }
                 .foregroundColor(.orange)
                 
-                Button("Delete All Recordings") {
-                    // Confirm and delete
-                }
+                Button("Delete All Recordings") { showingDeleteConfirm = true }
                 .foregroundColor(.red)
             } header: {
                 Text("Manage Data")
@@ -143,6 +185,12 @@ struct DataStorageView: View {
         .navigationTitle("Storage & Data")
         .onAppear {
             calculateStorage()
+        }
+        .alert("Delete All Recordings?", isPresented: $showingDeleteConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { deleteAllRecordings() }
+        } message: {
+            Text("This will delete all recordings and their audio files.")
         }
     }
     
@@ -164,6 +212,23 @@ struct DataStorageView: View {
                 storageUsed = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
             }
         }
+    }
+    
+    private func clearProcessedFiles() {
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let editedPath = documentsPath.appendingPathComponent("Edited", isDirectory: true)
+        if FileManager.default.fileExists(atPath: editedPath.path) {
+            try? FileManager.default.removeItem(at: editedPath)
+        }
+        calculateStorage()
+    }
+    
+    private func deleteAllRecordings() {
+        let manager = RecordingManager.shared
+        for r in manager.recordings {
+            manager.deleteRecording(r)
+        }
+        calculateStorage()
     }
 }
 

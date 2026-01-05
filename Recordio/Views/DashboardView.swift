@@ -1,14 +1,18 @@
 import SwiftUI
 import CoreData
 import Charts
+import AVFoundation
+import CoreMedia
 
 struct DashboardView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Binding var selectedTab: Int
     @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \Recording.createdAt, ascending: false)])
     private var recordings: FetchedResults<Recording>
     
     @State private var selectedTimeRange: TimeRange = .week
     @State private var showingUpgradePrompt = false
+    @State private var showingImporter = false
     
     enum TimeRange: String, CaseIterable {
         case day = "Today"
@@ -30,6 +34,20 @@ struct DashboardView: View {
         .navigationTitle("Dashboard")
         .sheet(isPresented: $showingUpgradePrompt) {
             ProUpgradePrompt(trigger: .advancedAnalytics)
+        }
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.audio],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importFile(from: url)
+                }
+            case .failure(let error):
+                print("Import failed: \(error.localizedDescription)")
+            }
         }
     }
     
@@ -64,28 +82,28 @@ struct DashboardView: View {
                 title: "New Recording",
                 icon: "mic.fill",
                 color: .red,
-                action: { }
+                action: { selectedTab = 2 }
             )
             
             QuickActionButton(
                 title: "Import",
                 icon: "square.and.arrow.down",
                 color: .blue,
-                action: { }
+                action: { showingImporter = true }
             )
             
             QuickActionButton(
                 title: "Backup",
                 icon: "icloud.fill",
                 color: .cyan,
-                action: { }
+                action: { selectedTab = 3 }
             )
             
             QuickActionButton(
                 title: "Settings",
                 icon: "gearshape.fill",
                 color: .gray,
-                action: { }
+                action: { selectedTab = 3 }
             )
         }
     }
@@ -151,8 +169,8 @@ struct DashboardView: View {
                 
                 Spacer()
                 
-                NavigationLink("See All") {
-                    RecordingsListView()
+                Button("See All") {
+                    selectedTab = 1
                 }
                 .font(.subheadline)
                 .foregroundColor(.blue)
@@ -241,6 +259,50 @@ struct DashboardView: View {
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+    
+    private func importFile(from url: URL) {
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+        
+        let fileManager = FileManager.default
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let filename = url.lastPathComponent
+        let destination = docs.appendingPathComponent(filename)
+        
+        do {
+            if fileManager.fileExists(atPath: destination.path) {
+                // Handle duplicate
+                let name = url.deletingPathExtension().lastPathComponent
+                let ext = url.pathExtension
+                let newName = "\(name) \(Date().timeIntervalSince1970).\(ext)"
+                let newDest = docs.appendingPathComponent(newName)
+                try fileManager.copyItem(at: url, to: newDest)
+                createRecordingEntry(at: newDest)
+            } else {
+                try fileManager.copyItem(at: url, to: destination)
+                createRecordingEntry(at: destination)
+            }
+        } catch {
+            print("Error importing file: \(error)")
+        }
+    }
+    
+    private func createRecordingEntry(at url: URL) {
+        let asset = AVURLAsset(url: url)
+        let duration = CMTimeGetSeconds(asset.duration)
+        let title = url.deletingPathExtension().lastPathComponent
+        
+        RecordingManager.shared.createRecording(
+            title: title,
+            audioURL: url,
+            duration: duration
+        )
+        
+        // Switch to Recordings tab to show the new file
+        DispatchQueue.main.async {
+            selectedTab = 1
+        }
     }
 }
 

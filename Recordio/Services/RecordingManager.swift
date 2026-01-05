@@ -125,6 +125,55 @@ class RecordingManager: ObservableObject {
         loadRecordings()
     }
     
+    // MARK: - Actions
+    
+    @discardableResult
+    func duplicateRecording(_ recording: Recording) -> Recording? {
+        guard let sourceURL = recording.audioURL else { return nil }
+        let filename = (recording.title ?? "Recording") + " Copy"
+        let destURL = sourceURL.deletingLastPathComponent()
+            .appendingPathComponent((filename.replacingOccurrences(of: " ", with: "_")) + "_" + UUID().uuidString + ".wav")
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: destURL)
+            let newRec = createRecording(
+                title: filename,
+                audioURL: destURL,
+                duration: recording.duration,
+                location: recording.location,
+                transcript: recording.transcript
+            )
+            newRec.tags = recording.tags
+            newRec.folder = recording.folder
+            saveContext()
+            loadRecordings()
+            return newRec
+        } catch {
+            return nil
+        }
+    }
+    
+    func moveRecording(_ recording: Recording, to folder: Folder?) {
+        recording.folder = folder
+        saveContext()
+        loadRecordings()
+    }
+    
+    func toggleFavorite(_ recording: Recording) {
+        var tags = (recording.tags ?? "")
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if let idx = tags.firstIndex(where: { $0.lowercased() == "favorite" }) {
+            tags.remove(at: idx)
+        } else {
+            tags.append("favorite")
+        }
+        let unique = Array(Set(tags))
+        recording.tags = unique.joined(separator: ",")
+        saveContext()
+        loadRecordings()
+    }
+    
     // MARK: - Folders
     
     @discardableResult

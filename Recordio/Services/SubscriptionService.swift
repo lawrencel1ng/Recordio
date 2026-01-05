@@ -100,6 +100,10 @@ class SubscriptionService: ObservableObject {
     func purchase(_ product: Product) async throws {
         isLoading = true
         
+        AppLogger.shared.logEvent(AppLogger.Events.purchaseAttempt, parameters: [
+            AppLogger.Params.productID: product.id
+        ])
+        
         do {
             let result = try await product.purchase()
             
@@ -110,12 +114,20 @@ class SubscriptionService: ObservableObject {
                 await updateSubscriptionStatus()
                 await transaction.finish()
                 
+                AppLogger.shared.logEvent(AppLogger.Events.purchaseSuccess, parameters: [
+                    AppLogger.Params.productID: product.id
+                ])
+                
                 await MainActor.run {
                     self.isLoading = false
                     self.purchaseError = nil
                 }
                 
             case .userCancelled:
+                AppLogger.shared.logEvent(AppLogger.Events.purchaseFailed, parameters: [
+                    AppLogger.Params.productID: product.id,
+                    AppLogger.Params.errorDescription: "user_cancelled"
+                ])
                 await MainActor.run {
                     self.isLoading = false
                     self.purchaseError = nil
@@ -128,12 +140,22 @@ class SubscriptionService: ObservableObject {
                 }
                 
             @unknown default:
+                AppLogger.shared.logEvent(AppLogger.Events.purchaseFailed, parameters: [
+                    AppLogger.Params.productID: product.id,
+                    AppLogger.Params.errorDescription: "unknown_error"
+                ])
                 await MainActor.run {
                     self.isLoading = false
                     self.purchaseError = "Purchase failed. Please try again."
                 }
             }
         } catch {
+            AppLogger.shared.logEvent(AppLogger.Events.purchaseFailed, parameters: [
+                AppLogger.Params.productID: product.id,
+                AppLogger.Params.errorDescription: error.localizedDescription
+            ])
+            AppLogger.shared.logError(error, additionalInfo: ["context": "purchase", "productID": product.id])
+            
             await MainActor.run {
                 self.isLoading = false
                 self.purchaseError = error.localizedDescription

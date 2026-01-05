@@ -12,25 +12,39 @@ struct ContentView: View {
             OnboardingView(isPresented: $showingOnboarding)
         } else {
             TabView(selection: $selectedTab) {
+                NavigationView {
+                    DashboardView(selectedTab: $selectedTab)
+                }
+                .tabItem {
+                    Label("Dashboard", systemImage: "chart.bar.fill")
+                }
+                .tag(0)
+
                 RecordingsListView()
                     .tabItem {
                         Label("Recordings", systemImage: "tray.fill")
                     }
-                    .tag(0)
+                    .tag(1)
                 
                 RecordingViewWrapper()
                     .tabItem {
                         Label("Record", systemImage: "plus.circle.fill")
                     }
-                    .tag(1)
+                    .tag(2)
                 
                 SettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gearshape.fill")
                     }
-                    .tag(2)
+                    .tag(3)
             }
             .accentColor(.blue)
+            .onOpenURL { url in
+                if url.scheme?.lowercased() == "recordio" && (url.host?.lowercased() == "capture" || url.path.lowercased().contains("capture")) {
+                    selectedTab = 2
+                    NotificationCenter.default.post(name: .quickCaptureRequested, object: nil)
+                }
+            }
         }
     }
 }

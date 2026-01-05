@@ -6,6 +6,12 @@ struct RecordioApp: App {
     let persistenceController = PersistenceController.shared
     @StateObject private var appState = AppState.shared
     @StateObject private var biometricAuth = BiometricAuthService.shared
+    @AppStorage("appearanceMode") private var appearanceMode: String = "system"
+    
+    init() {
+        AppLogger.shared.configure()
+        AppLogger.shared.logEvent(AppLogger.Events.appLaunch)
+    }
     
     var body: some Scene {
         WindowGroup {
@@ -14,12 +20,25 @@ struct RecordioApp: App {
                     .environment(\.managedObjectContext, persistenceController.container.viewContext)
                     .environmentObject(appState)
                     .environmentObject(biometricAuth)
+                    .preferredColorScheme(preferredScheme)
             } else {
                 ContentView()
                     .environment(\.managedObjectContext, persistenceController.container.viewContext)
                     .environmentObject(appState)
                     .environmentObject(biometricAuth)
+                    .preferredColorScheme(preferredScheme)
             }
+        }
+    }
+    
+    private var preferredScheme: ColorScheme? {
+        switch appearanceMode {
+        case "dark":
+            return .dark
+        case "light":
+            return .light
+        default:
+            return nil
         }
     }
 }

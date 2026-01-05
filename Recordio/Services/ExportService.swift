@@ -8,6 +8,11 @@ class ExportService {
     private init() {}
     
     func exportRecording(_ recording: Recording, format: ExportFormat, completion: @escaping (Result<URL, Error>) -> Void) {
+        AppLogger.shared.logEvent(AppLogger.Events.exportStarted, parameters: [
+            "type": "audio",
+            AppLogger.Params.fileFormat: format.fileExtension
+        ])
+        
         guard let audioURL = recording.audioURL else {
             completion(.failure(ExportError.noAudioFile))
             return
@@ -17,10 +22,15 @@ class ExportService {
             do {
                 let outputURL = try self.exportAudio(from: audioURL, format: format, recording: recording)
                 DispatchQueue.main.async {
+                    AppLogger.shared.logEvent(AppLogger.Events.exportCompleted, parameters: [
+                        "type": "audio",
+                        AppLogger.Params.fileFormat: format.fileExtension
+                    ])
                     completion(.success(outputURL))
                 }
             } catch {
                 DispatchQueue.main.async {
+                    AppLogger.shared.logError(error, additionalInfo: ["context": "exportRecording"])
                     completion(.failure(error))
                 }
             }
@@ -28,6 +38,11 @@ class ExportService {
     }
     
     func exportTranscript(_ recording: Recording, format: TranscriptFormat, completion: @escaping (Result<URL, Error>) -> Void) {
+        AppLogger.shared.logEvent(AppLogger.Events.exportStarted, parameters: [
+            "type": "transcript",
+            AppLogger.Params.fileFormat: format.fileExtension
+        ])
+        
         guard let transcript = recording.transcript else {
             completion(.failure(ExportError.noTranscript))
             return
@@ -37,10 +52,15 @@ class ExportService {
             do {
                 let outputURL = try self.exportTranscriptText(transcript, format: format, recording: recording)
                 DispatchQueue.main.async {
+                    AppLogger.shared.logEvent(AppLogger.Events.exportCompleted, parameters: [
+                        "type": "transcript",
+                        AppLogger.Params.fileFormat: format.fileExtension
+                    ])
                     completion(.success(outputURL))
                 }
             } catch {
                 DispatchQueue.main.async {
+                    AppLogger.shared.logError(error, additionalInfo: ["context": "exportTranscript"])
                     completion(.failure(error))
                 }
             }

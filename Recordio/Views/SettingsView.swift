@@ -9,6 +9,9 @@ struct SettingsView: View {
     @AppStorage("autoReduceNoise") private var autoReduceNoise = false
     @AppStorage("autoTranscribe") private var autoTranscribe = true
     @AppStorage("speakerIdentification") private var speakerIdentification = true
+    @AppStorage("appearanceMode") private var appearanceMode: String = "system"
+    @AppStorage("largeRecordButton") private var largeRecordButton: Bool = false
+    @AppStorage("maxFileSizeMB") private var maxFileSizeMB: Int = 0
     @State private var isTogglingBiometric = false
     @State private var biometricError: String?
     @State private var showingBiometricError = false
@@ -20,6 +23,7 @@ struct SettingsView: View {
         NavigationView {
             Form {
                 subscriptionSection
+                appearanceSection
                 cloudBackupSection
                 securitySection
                 recordingSection
@@ -125,6 +129,43 @@ struct SettingsView: View {
         }
     }
     
+    private var appearanceSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(colors: [.gray, .black], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .frame(width: 32, height: 32)
+                    
+                    Image(systemName: "moon.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Appearance")
+                        .font(.body)
+                    
+                    Picker("Appearance", selection: $appearanceMode) {
+                        Text("System").tag("system")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Choose app appearance independent of system setting")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
     private var securitySection: some View {
         Section {
             HStack(spacing: 12) {
@@ -200,101 +241,206 @@ struct SettingsView: View {
     
     private var cloudBackupSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(
-                                LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            )
-                            .frame(width: 32, height: 32)
-                        
-                        Image(systemName: "icloud.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("iCloud Backup")
-                            .font(.body)
-                        
-                        if cloudBackup.isBackupEnabled {
-                            if let lastDate = cloudBackup.lastBackupDate {
-                                Text("Last backup: \(lastDate, style: .relative)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Text("Backup enabled")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                            Text("Securely backup your recordings")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: cloudBackup.selectedProviderType == .iCloud ? "icloud.fill" : "externaldrive.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
                         }
-                    }
-                    
-                    Spacer()
-                    
-                    if isTogglingBackup {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                    } else {
-                        Toggle("", isOn: Binding(
-                            get: { cloudBackup.isBackupEnabled },
-                            set: { _ in toggleBackup() }
-                        ))
-                        .disabled(!cloudBackup.isAvailable)
-                    }
-                }
-                .padding(.vertical, 4)
-                
-                if cloudBackup.isBackupEnabled {
-                    Divider()
-                    
-                    HStack {
+                        
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Backup Size")
-                                .font(.caption)
+                            Text("Backup Provider")
+                                .font(.subheadline)
                                 .foregroundColor(.secondary)
-                            
-                            if let size = cloudBackup.backupSize {
-                                Text(size)
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                            } else {
-                                Text("Calculating...")
-                                    .font(.subheadline)
-                            }
+                            Text(cloudBackup.selectedProviderType.displayName)
+                                .font(.headline)
                         }
                         
                         Spacer()
                         
-                        Button(action: { Task { await cloudBackup.performBackup() } }) {
-                            Label("Backup Now", systemImage: "arrow.clockwise")
+                        Picker("", selection: $cloudBackup.selectedProviderType) {
+                            ForEach(BackupProviderType.allCases, id: \.self) { t in
+                                Text(t.displayName).tag(t)
+                            }
                         }
-                        .disabled(cloudBackup.isBackupInProgress)
-                        .buttonStyle(.borderedProminent)
+                        .pickerStyle(.menu)
+                        .onChange(of: cloudBackup.selectedProviderType) { _, newValue in
+                            cloudBackup.setProvider(newValue)
+                        }
                     }
                     
-                    if cloudBackup.isBackupInProgress {
-                        HStack {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                            
-                            Text("Backing up...")
+                    HStack {
+                        if cloudBackup.selectedProviderType == .iCloud {
+                            Text("Unavailable on this build")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.gray.opacity(0.15))
+                                .cornerRadius(12)
+                        } else if !cloudBackup.isAvailable {
+                            Text("Not connected")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.orange.opacity(0.12))
+                                .cornerRadius(12)
+                            Spacer()
+                            Button(action: { Task { await cloudBackup.authorizeProvider() } }) {
+                                Label("Connect", systemImage: "link")
+                                    .labelStyle(.titleAndIcon)
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        } else {
+                            Text("Connected")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.green.opacity(0.12))
+                                .cornerRadius(12)
+                        }
+                        Spacer()
+                    }
+                }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
+                
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(cloudBackup.selectedProviderType.displayName) Backup")
+                                .font(.headline)
+                            if cloudBackup.isBackupEnabled {
+                                if let lastDate = cloudBackup.lastBackupDate {
+                                    Text("Last backup \(lastDate, style: .relative)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Backup enabled")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                Text("Securely backup your recordings")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if isTogglingBackup {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        } else {
+                            Toggle("", isOn: Binding(
+                                get: { cloudBackup.isBackupEnabled },
+                                set: { _ in toggleBackup() }
+                            ))
+                            .disabled(!cloudBackup.isAvailable)
+                            .opacity(cloudBackup.isAvailable ? 1 : 0.5)
+                        }
+                    }
+                    
+                    if cloudBackup.isBackupEnabled {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Backup Size")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if let size = cloudBackup.backupSize {
+                                    Text(size)
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                } else {
+                                    Text("Calculating…")
+                                        .font(.subheadline)
+                                }
+                            }
+                            Spacer()
+                            Button(action: { Task { await cloudBackup.performBackup() } }) {
+                                Label("Backup Now", systemImage: "arrow.clockwise")
+                            }
+                            .disabled(cloudBackup.isBackupInProgress)
+                            .buttonStyle(.borderedProminent)
+                            Button(action: {
+                                do { _ = try cloudBackup.exportRecoveryKey() }
+                                catch { cloudBackup.error = .backupFailed(error.localizedDescription) }
+                            }) {
+                                Label("Export Recovery Key", systemImage: "key.fill")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        
+                        HStack(spacing: 12) {
+                            Text("Scheduled Backup")
+                                .font(.body)
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { cloudBackup.scheduledBackupEnabled },
+                                set: { enabled in
+                                    cloudBackup.setScheduledBackup(enabled: enabled, hour: cloudBackup.scheduledHour, minute: cloudBackup.scheduledMinute)
+                                }
+                            ))
+                            .disabled(!cloudBackup.isAvailable)
+                        }
+                        
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Hour")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Stepper(value: Binding(
+                                    get: { cloudBackup.scheduledHour },
+                                    set: { h in cloudBackup.setScheduledBackup(enabled: cloudBackup.scheduledBackupEnabled, hour: h, minute: cloudBackup.scheduledMinute) }
+                                ), in: 0...23) {
+                                    Text(String(format: "%02d", cloudBackup.scheduledHour))
+                                        .font(.subheadline)
+                                }
+                            }
+                            Spacer()
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Minute")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Stepper(value: Binding(
+                                    get: { cloudBackup.scheduledMinute },
+                                    set: { m in cloudBackup.setScheduledBackup(enabled: cloudBackup.scheduledBackupEnabled, hour: cloudBackup.scheduledHour, minute: m) }
+                                ), in: 0...59) {
+                                    Text(String(format: "%02d", cloudBackup.scheduledMinute))
+                                        .font(.subheadline)
+                                }
+                            }
+                        }
+                        
+                        if cloudBackup.isBackupInProgress {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                Text("Backing up…")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
+                .padding()
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
             }
         } header: {
             Text("Cloud Backup")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Recordings are encrypted before uploading to iCloud.")
+                Text("Recordings are encrypted before uploading.")
                     .font(.caption)
                 
                 if let recovery = cloudBackup.error?.recoverySuggestion {
@@ -304,7 +450,7 @@ struct SettingsView: View {
                 }
                 
                 if !cloudBackup.isAvailable {
-                    Text("iCloud is not available on this device")
+                    Text("\(cloudBackup.selectedProviderType.displayName) is not available on this device")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -329,11 +475,82 @@ struct SettingsView: View {
     
     private var recordingSection: some View {
         Section {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.purple.gradient)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recording Profile")
+                        .font(.body)
+                    Picker("Recording Profile", selection: Binding(
+                        get: { UserDefaults.standard.string(forKey: "recordingProfile") ?? "lecture" },
+                        set: { UserDefaults.standard.set($0, forKey: "recordingProfile") }
+                    )) {
+                        Text("Voice").tag("voice")
+                        Text("Lecture").tag("lecture")
+                        Text("Music").tag("music")
+                        Text("Field").tag("field")
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.orange.gradient)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "arrow.counterclockwise.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Pre-roll Rewind")
+                        .font(.body)
+                    Picker("Pre-roll", selection: Binding(
+                        get: { UserDefaults.standard.integer(forKey: "prebufferSeconds") },
+                        set: { UserDefaults.standard.set($0, forKey: "prebufferSeconds") }
+                    )) {
+                        Text("Off").tag(0)
+                        Text("15s").tag(15)
+                        Text("30s").tag(30)
+                        Text("60s").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.red.gradient)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "externaldrive.fill.badge.exclamationmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Max Recording File Size")
+                        .font(.body)
+                    HStack {
+                        Stepper(value: $maxFileSizeMB, in: 0...2048) {
+                            Text(maxFileSizeMB == 0 ? "Disabled" : "\(maxFileSizeMB) MB")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+            
             SettingsRow(
                 icon: "waveform",
                 iconColor: .purple,
                 title: "Audio Quality",
-                value: "48kHz / 24-bit"
+                value: audioQualityDisplay
             )
             
             SettingsRow(
@@ -358,6 +575,14 @@ struct SettingsView: View {
                 isOn: $autoReduceNoise,
                 isDisabled: !appState.canAccess(feature: .aiNoiseReduction)
             )
+            
+            SettingsToggleRow(
+                icon: "circle.inset.filled",
+                iconColor: .red,
+                title: "Large Record Button",
+                isOn: $largeRecordButton,
+                isDisabled: false
+            )
         } header: {
             Text("Recording")
         } footer: {
@@ -368,6 +593,20 @@ struct SettingsView: View {
                 Text("Audio processing will be applied after recording")
                     .font(.caption)
             }
+        }
+    }
+    
+    private var audioQualityDisplay: String {
+        let profile = UserDefaults.standard.string(forKey: "recordingProfile") ?? "lecture"
+        switch profile {
+        case "voice":
+            return "44.1kHz / 16-bit"
+        case "music":
+            return "96kHz / 24-bit"
+        case "field":
+            return "48kHz / 24-bit • Stereo"
+        default:
+            return "48kHz / 24-bit"
         }
     }
     

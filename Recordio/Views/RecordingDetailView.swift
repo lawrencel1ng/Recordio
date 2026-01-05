@@ -1,14 +1,19 @@
 import SwiftUI
 import AVFoundation
+import CoreMedia
 import Combine
 import CoreData
 
 struct RecordingDetailView: View {
     let recording: Recording
     @StateObject private var audioPlayer = AudioPlayer()
+    @StateObject private var recordingManager = RecordingManager.shared
     @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
     
     @State private var showingShareSheet = false
+    @State private var shareItems: [Any] = []
+    @State private var showSpectrogram = false
     @State private var showingEditSheet = false
     @State private var showingUpgradePrompt = false
     @State private var showingExportSheet = false
@@ -17,6 +22,8 @@ struct RecordingDetailView: View {
     @State private var processingAlert: ProcessingAlert?
     @State private var editorError: String?
     @State private var showingErrorAlert = false
+    @State private var showingMoveSheet = false
+    @State private var selectedMoveFolder: Folder?
     
     init(recording: Recording) {
         self.recording = recording
@@ -37,26 +44,52 @@ struct RecordingDetailView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button(action: { showingShareSheet = true }) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
+                    Button(action: {
+                        if let url = recording.audioURL {
+                            shareItems = [url]
+                            showingShareSheet = true
+                        }
+                    }) { Label("Share", systemImage: "square.and.arrow.up") }
                     
-                    Button(action: { showingEditSheet = true }) {
-                        Label("Edit", systemImage: "pencil")
+                    Button(action: { showingExportSheet = true }) { Label("Export", systemImage: "square.and.arrow.up.on.square") }
+                    
+                    Button(action: { showingEditorSheet = true }) { Label("Open Editor", systemImage: "scissors") }
+                    
+                    Button(action: duplicateRecording) { Label("Duplicate Recording", systemImage: "doc.on.doc") }
+                    
+                    Button(action: { showingMoveSheet = true }) { Label("Move to Folder", systemImage: "folder.badge.plus") }
+                    
+                    Button(action: toggleFavorite) { Label("Mark as Favorite", systemImage: "star") }
+                    
+                    Button(action: generateShareableLink) { Label("Generate Shareable Link", systemImage: "link") }
+                    
+                    if appState.canAccess(feature: .audioEnhancement) {
+                        Button(action: enhanceAudio) { Label("Enhance Audio", systemImage: "wand.and.stars") }
+                    }
+                    if appState.canAccess(feature: .aiNoiseReduction) {
+                        Button(action: reduceNoise) { Label("Reduce Noise", systemImage: "speaker.wave.3.fill") }
                     }
                     
                     Divider()
                     
-                    Button(role: .destructive, action: {}) {
-                        Label("Delete", systemImage: "trash")
-                    }
+                    Button(action: { showingEditSheet = true }) { Label("Edit Info", systemImage: "pencil") }
+                    
+                    Divider()
+                    
+                    Button(role: .destructive, action: {
+                        RecordingManager.shared.deleteRecording(recording)
+                        dismiss()
+                    }) { Label("Delete", systemImage: "trash") }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
         }
+        .sheet(isPresented: $showingMoveSheet) {
+            FolderSelectionSheet(recording: recording)
+        }
         .sheet(isPresented: $showingShareSheet) {
-            ShareSheet(items: [recording.audioURL as Any])
+            ShareSheet(items: shareItems)
         }
         .sheet(isPresented: $showingEditSheet) {
             EditRecordingSheet(recording: recording)
@@ -134,25 +167,40 @@ struct RecordingDetailView: View {
     
     private var audioPlayerView: some View {
         VStack(spacing: 20) {
-            WaveformVisualization(recording: recording)
+            if showSpectrogram {
+                SpectrogramView(recording: recording)
+                    .frame(height: 160)
+            } else {
+                WaveformVisualization(recording: recording)
+            }
             
             HStack(spacing: 20) {
                 Button(action: skipBackward) {
                     Image(systemName: "gobackward.15")
                         .font(.title2)
                 }
+                .accessibilityLabel("Skip Backward 15 Seconds")
                 
                 Button(action: togglePlayPause) {
                     Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 60))
                         .foregroundColor(.blue)
                 }
+                .accessibilityLabel(audioPlayer.isPlaying ? "Pause" : "Play")
                 
                 Button(action: skipForward) {
                     Image(systemName: "goforward.15")
                         .font(.title2)
                 }
+                .accessibilityLabel("Skip Forward 15 Seconds")
             }
+            
+            Picker("View", selection: $showSpectrogram) {
+                Text("Waveform").tag(false)
+                Text("Spectrogram").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
             
             VStack(spacing: 4) {
                 Slider(value: $audioPlayer.currentTime, in: 0...audioPlayer.duration)
@@ -550,14 +598,24 @@ struct RecordingDetailView: View {
         }
     }
     
-    private func showShareSheet(for url: URL, title: String) {
-        // Using UIActivityViewController
-        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityVC, animated: true)
+    private func duplicateRecording() {
+        _ = recordingManager.duplicateRecording(recording)
+    }
+    
+    private func toggleFavorite() {
+        recordingManager.toggleFavorite(recording)
+    }
+    
+    private func generateShareableLink() {
+        if let url = recording.audioURL {
+            shareItems = [url]
+            showingShareSheet = true
         }
+    }
+    
+    private func showShareSheet(for url: URL, title: String) {
+        shareItems = [url]
+        showingShareSheet = true
     }
     
     private func showProcessingError(_ message: String) {
@@ -586,6 +644,119 @@ struct RecordingDetailView: View {
     }
 }
 
+#if canImport(AVFoundation)
+import AVFoundation
+struct SpectrogramView: View {
+    let recording: Recording
+    @State private var magnitudes: [[CGFloat]] = []
+    
+    var body: some View {
+        GeometryReader { geo in
+            if magnitudes.isEmpty {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1))
+                    ProgressView()
+                }
+            } else {
+                let timeCount = magnitudes.count
+                let freqCount = magnitudes.first?.count ?? 0
+                HStack(spacing: 0) {
+                    ForEach(0..<timeCount, id: \.self) { t in
+                        VStack(spacing: 0) {
+                            ForEach(0..<freqCount, id: \.self) { f in
+                                Rectangle()
+                                    .fill(color(for: magnitudes[t][f]))
+                            }
+                        }
+                    }
+                }
+                .onAppear {
+                    let w = max(1, Int(geo.size.width / CGFloat(max(1, timeCount))))
+                    let h = max(1, Int(geo.size.height / CGFloat(max(1, freqCount))))
+                    _ = w; _ = h
+                }
+            }
+        }
+        .onAppear { generateSpectrogram() }
+    }
+    
+    private func color(for value: CGFloat) -> Color {
+        let v = min(1, max(0, value))
+        return Color(hue: 0.6 - 0.6 * v, saturation: 1, brightness: max(0.2, v))
+    }
+    
+    private func generateSpectrogram() {
+        guard let url = recording.audioURL else { return }
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .audio).first else { return }
+        let reader = try? AVAssetReader(asset: asset)
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false
+        ]
+        let output = AVAssetReaderAudioMixOutput(audioTracks: [track], audioSettings: settings)
+        output.audioMix = AVAudioMix()
+        if let reader = reader, reader.canAdd(output) {
+            reader.add(output)
+            reader.startReading()
+            var samples: [Float] = []
+            while reader.status == .reading {
+                if let buf = output.copyNextSampleBuffer(),
+                   let block = CMSampleBufferGetDataBuffer(buf) {
+                    let length = CMBlockBufferGetDataLength(block)
+                    var buffer = [UInt8](repeating: 0, count: length)
+                    let status = buffer.withUnsafeMutableBytes { ptr in
+                        CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
+                    }
+                    guard status == kCMBlockBufferNoErr else { continue }
+                    let count = length / MemoryLayout<Int16>.size
+                    samples.reserveCapacity(samples.count + count)
+                    buffer.withUnsafeBytes { raw in
+                        let ptr = raw.bindMemory(to: Int16.self)
+                        for i in 0..<count {
+                            samples.append(Float(ptr[i]) / Float(Int16.max))
+                        }
+                    }
+                } else {
+                    break
+                }
+            }
+            let windowSize = 1024
+            let hopSize = 512
+            let bins = 64
+            var result: [[CGFloat]] = []
+            var i = 0
+            while i + windowSize <= samples.count {
+                let window = Array(samples[i..<(i+windowSize)])
+                var re = [Float](repeating: 0, count: windowSize)
+                var im = [Float](repeating: 0, count: windowSize)
+                for k in 0..<windowSize { re[k] = window[k] }
+                var magn = [CGFloat](repeating: 0, count: bins)
+                let step = windowSize / (bins * 2)
+                for b in 0..<bins {
+                    var sum: Float = 0
+                    let start = b * step
+                    let end = min(windowSize/2 - 1, start + step)
+                    for k in start..<end {
+                        let v = re[k]*re[k] + im[k]*im[k]
+                        sum += v
+                    }
+                    magn[b] = CGFloat(min(1.0, sqrt(sum)))
+                }
+                result.append(magn)
+                i += hopSize
+            }
+            DispatchQueue.main.async {
+                magnitudes = result
+            }
+        }
+    }
+}
+#endif
 struct WaveformVisualization: View {
     let recording: Recording
     @EnvironmentObject var appState: AppState
@@ -818,6 +989,8 @@ struct EditRecordingSheet: View {
     }
 }
 
+#if os(iOS)
+import UIKit
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     
@@ -827,6 +1000,23 @@ struct ShareSheet: UIViewControllerRepresentable {
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#elseif os(macOS)
+import AppKit
+struct ShareSheet: NSViewRepresentable {
+    let items: [Any]
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            let picker = NSSharingServicePicker(items: items)
+            picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+#endif
 
 struct ExportOptionsSheet: View {
     let recording: Recording
@@ -835,9 +1025,11 @@ struct ExportOptionsSheet: View {
     @EnvironmentObject var appState: AppState
     
     @State private var selectedAudioFormat: ExportFormat = .wav
+    @State private var selectedAudioFormats: Set<ExportFormat> = []
     @State private var selectedTranscriptFormat: TranscriptFormat = .txt
     @State private var exportAudio = true
     @State private var exportTranscript = false
+    @State private var exportMultipleAudioFormats = false
     @State private var showingShareSheet = false
     @State private var exportURLs: [URL] = []
     
@@ -848,9 +1040,22 @@ struct ExportOptionsSheet: View {
                     Toggle("Export Audio", isOn: $exportAudio)
                     
                     if exportAudio {
-                        Picker("Audio Format", selection: $selectedAudioFormat) {
+                        Toggle("Export Multiple Formats", isOn: $exportMultipleAudioFormats)
+                        
+                        if exportMultipleAudioFormats {
                             ForEach(ExportFormat.allCases, id: \.self) { format in
-                                Text(format.rawValue).tag(format)
+                                Toggle(format.rawValue, isOn: Binding(
+                                    get: { selectedAudioFormats.contains(format) },
+                                    set: { isOn in
+                                        if isOn { selectedAudioFormats.insert(format) } else { selectedAudioFormats.remove(format) }
+                                    }
+                                ))
+                            }
+                        } else {
+                            Picker("Audio Format", selection: $selectedAudioFormat) {
+                                ForEach(ExportFormat.allCases, id: \.self) { format in
+                                    Text(format.rawValue).tag(format)
+                                }
                             }
                         }
                     }
@@ -920,15 +1125,31 @@ struct ExportOptionsSheet: View {
         let group = DispatchGroup()
         
         if exportAudio {
-            group.enter()
-            ExportService.shared.exportRecording(recording, format: selectedAudioFormat) { result in
-                switch result {
-                case .success(let url):
-                    exportURLs.append(url)
-                case .failure(let error):
-                    print("Export error: \(error)")
+            if exportMultipleAudioFormats {
+                let formats = selectedAudioFormats.isEmpty ? [selectedAudioFormat] : Array(selectedAudioFormats)
+                for format in formats {
+                    group.enter()
+                    ExportService.shared.exportRecording(recording, format: format) { result in
+                        switch result {
+                        case .success(let url):
+                            exportURLs.append(url)
+                        case .failure(let error):
+                            print("Export error: \(error)")
+                        }
+                        group.leave()
+                    }
                 }
-                group.leave()
+            } else {
+                group.enter()
+                ExportService.shared.exportRecording(recording, format: selectedAudioFormat) { result in
+                    switch result {
+                    case .success(let url):
+                        exportURLs.append(url)
+                    case .failure(let error):
+                        print("Export error: \(error)")
+                    }
+                    group.leave()
+                }
             }
         }
         

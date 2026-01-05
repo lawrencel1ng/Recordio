@@ -7,10 +7,47 @@ class SpeakerDiarizationService {
     
     private init() {}
     
+    private let defaultAdvancedPackRemote = URL(string: "https://recordio.app/models/advanced_diarization.pack")
+    private let odrTag = "advanced_diarization_pack"
+    private let odrResourceName = "advanced_diarization"
+    private let odrResourceExtension = "pack"
+    
+    private var isAdvancedEnabled: Bool {
+        return UserDefaults.standard.bool(forKey: "advancedDiarizationEnabled")
+    }
+    
+    private func sanitizedURLString(_ s: String) -> String {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trailingPunct = CharacterSet(charactersIn: ",`\"' ")
+        return trimmed.trimmingCharacters(in: trailingPunct)
+    }
+    private var advancedPackURL: URL? {
+        if let s = UserDefaults.standard.string(forKey: "advanced.diarization.url") {
+            let sanitized = sanitizedURLString(s)
+            if let u = URL(string: sanitized), let scheme = u.scheme, (scheme == "https" || scheme == "http"), u.host != nil {
+                return u
+            }
+        }
+        return defaultAdvancedPackRemote
+    }
+    private var advancedPackLocalURL: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("Models/advanced_diarization.pack", isDirectory: false)
+    }
+    
+    func isAdvancedPackInstalled() -> Bool {
+        FileManager.default.fileExists(atPath: advancedPackLocalURL.path)
+    }
+    
     func processAudioFile(_ url: URL, completion: @escaping (Result<[SpeakerSegmentInfo], Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let segments = try self.analyzeSpeakers(in: url)
+                let segments: [SpeakerSegmentInfo]
+                if self.isAdvancedEnabled, FileManager.default.fileExists(atPath: self.advancedPackLocalURL.path) {
+                    segments = try self.analyzeSpeakersAdvanced(in: url)
+                } else {
+                    segments = try self.analyzeSpeakers(in: url)
+                }
                 DispatchQueue.main.async {
                     completion(.success(segments))
                 }
@@ -20,6 +57,39 @@ class SpeakerDiarizationService {
                 }
             }
         }
+    }
+    
+    func downloadAdvancedPack(completion: @escaping (Result<Void, Error>) -> Void) {
+        #if os(iOS)
+        let request = NSBundleResourceRequest(tags: Set([odrTag]))
+        request.loadingPriority = NSBundleResourceRequestLoadingPriorityUrgent
+        request.beginAccessingResources { error in
+            if let error = error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+            guard let resourceURL = Bundle.main.url(forResource: self.odrResourceName, withExtension: self.odrResourceExtension) else {
+                request.endAccessingResources()
+                DispatchQueue.main.async { completion(.failure(SpeakerDiarizationError.processingFailed)) }
+                return
+            }
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let modelsDir = docs.appendingPathComponent("Models", isDirectory: true)
+            try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+            let dest = self.advancedPackLocalURL
+            do {
+                if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
+                try FileManager.default.copyItem(at: resourceURL, to: dest)
+                request.endAccessingResources()
+                DispatchQueue.main.async { completion(.success(())) }
+            } catch {
+                request.endAccessingResources()
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+        #else
+        completion(.failure(SpeakerDiarizationError.processingFailed))
+        #endif
     }
     
     private func analyzeSpeakers(in url: URL) throws -> [SpeakerSegmentInfo] {
@@ -90,6 +160,130 @@ class SpeakerDiarizationService {
         assetReader.cancelReading()
         
         return mergeConsecutiveSegments(segments: segments, minSegmentDuration: 1.0)
+    }
+    
+    private func analyzeSpeakersAdvanced(in url: URL) throws -> [SpeakerSegmentInfo] {
+        let asset = AVAsset(url: url)
+        guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
+            throw SpeakerDiarizationError.noAudioTrack
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let output = try AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ])
+        reader.add(output)
+        reader.startReading()
+        var frames: [[Float]] = []
+        let windowSize = 1024
+        var samples: [Float] = []
+        while let sb = output.copyNextSampleBuffer() {
+            guard let bb = CMSampleBufferGetDataBuffer(sb) else { break }
+            var length: Int = 0
+            var ptr: UnsafeMutablePointer<Int8>?
+            CMBlockBufferGetDataPointer(bb, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &ptr)
+            if let p = ptr {
+                let count = length / MemoryLayout<Int16>.size
+                let int16p = p.withMemoryRebound(to: Int16.self, capacity: count) { $0 }
+                for i in 0..<count {
+                    samples.append(Float(int16p[i]) / Float(Int16.max))
+                    if samples.count >= windowSize {
+                        frames.append(computeFeatures(samples: Array(samples.suffix(windowSize))))
+                        samples.removeAll(keepingCapacity: true)
+                    }
+                }
+            }
+        }
+        reader.cancelReading()
+        let k = max(2, detectNumberOfSpeakers(audioTrack: audioTrack))
+        let assignments = kMeans(features: frames, k: k, iterations: 10)
+        var result: [SpeakerSegmentInfo] = []
+        let hopSeconds = Double(windowSize) / 48000.0
+        var t = 0.0
+        var lastSpeaker = assignments.first ?? 0
+        var segStart = 0.0
+        for (idx, spk) in assignments.enumerated() {
+            if spk != lastSpeaker {
+                let segEnd = segStart + Double(idx) * hopSeconds
+                result.append(SpeakerSegmentInfo(speakerId: Int16(lastSpeaker), startTime: segStart, endTime: segEnd, confidence: 0.8))
+                segStart = segEnd
+                lastSpeaker = spk
+            }
+            t += hopSeconds
+        }
+        let finalEnd = segStart + Double(assignments.count) * hopSeconds
+        result.append(SpeakerSegmentInfo(speakerId: Int16(lastSpeaker), startTime: segStart, endTime: finalEnd, confidence: 0.8))
+        return mergeConsecutiveSegments(segments: result, minSegmentDuration: 0.5)
+    }
+    
+    private func computeFeatures(samples: [Float]) -> [Float] {
+        let n = samples.count
+        guard n > 0 else { return [Float](repeating: 0, count: 13) }
+        
+        var windowed = samples
+        var hann = [Float](repeating: 0, count: n)
+        vDSP_hann_window(&hann, vDSP_Length(n), Int32(vDSP_HANN_DENORM))
+        vDSP_vmul(samples, 1, hann, 1, &windowed, 1, vDSP_Length(n))
+        
+        var absSamples = [Float](repeating: 0, count: n)
+        vDSP_vabs(windowed, 1, &absSamples, 1, vDSP_Length(n))
+        
+        var features = [Float](repeating: 0, count: 13)
+        let step = max(1, n / 13)
+        for i in 0..<13 {
+            let start = i * step
+            let end = min(n, start + step)
+            if end > start {
+                var sum: Float = 0
+                vDSP_sve(Array(absSamples[start..<end]), 1, &sum, vDSP_Length(end - start))
+                features[i] = sum / Float(end - start)
+            } else {
+                features[i] = 0
+            }
+        }
+        return features
+    }
+    
+    private func kMeans(features: [[Float]], k: Int, iterations: Int) -> [Int] {
+        guard !features.isEmpty else { return [] }
+        var centroids = Array(features.prefix(k))
+        var assigns = [Int](repeating: 0, count: features.count)
+        for _ in 0..<iterations {
+            for (i, f) in features.enumerated() {
+                var best = 0
+                var bestDist = Float.greatestFiniteMagnitude
+                for c in 0..<centroids.count {
+                    let dist = euclidean(a: f, b: centroids[c])
+                    if dist < bestDist { bestDist = dist; best = c }
+                }
+                assigns[i] = best
+            }
+            var sums = Array(repeating: [Float](repeating: 0, count: features[0].count), count: k)
+            var counts = [Int](repeating: 0, count: k)
+            for (i, f) in features.enumerated() {
+                let a = assigns[i]
+                for j in 0..<f.count { sums[a][j] += f[j] }
+                counts[a] += 1
+            }
+            for c in 0..<k {
+                if counts[c] > 0 {
+                    centroids[c] = sums[c].map { $0 / Float(counts[c]) }
+                }
+            }
+        }
+        return assigns
+    }
+    
+    private func euclidean(a: [Float], b: [Float]) -> Float {
+        var s: Float = 0
+        for i in 0..<min(a.count, b.count) {
+            let d = a[i] - b[i]
+            s += d * d
+        }
+        return s
     }
     
     private func detectNumberOfSpeakers(audioTrack: AVAssetTrack) -> Int {

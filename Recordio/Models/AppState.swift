@@ -77,6 +77,8 @@ class AppState: ObservableObject {
             return currentTier == .pro || currentTier == .lifetime
         case .exportSpeakerTracks:
             return currentTier == .pro || currentTier == .lifetime
+        case .advancedSpeakerDiarization:
+            return currentTier == .lifetime
         }
     }
 }
@@ -87,4 +89,5 @@ enum Feature {
     case aiSummaries
     case audioEnhancement
     case exportSpeakerTracks
+    case advancedSpeakerDiarization
 }

@@ -60,6 +60,8 @@ class TranscriptionService {
     }
     
     private func performTranscription(url: URL, speakerSegments: [SpeakerSegmentInfo], completion: @escaping (Result<String, Error>) -> Void) {
+        AppLogger.shared.logEvent(AppLogger.Events.transcriptionStarted)
+        
         let request = SFSpeechURLRecognitionRequest(url: url)
         request.shouldReportPartialResults = false
         request.taskHint = .dictation
@@ -78,6 +80,10 @@ class TranscriptionService {
                         // No speech detected - return empty transcript
                         completion(.success(""))
                     } else {
+                        AppLogger.shared.logError(error, additionalInfo: ["context": "transcription"])
+                        AppLogger.shared.logEvent(AppLogger.Events.transcriptionFailed, parameters: [
+                            AppLogger.Params.errorDescription: error.localizedDescription
+                        ])
                         completion(.failure(error))
                     }
                     return
@@ -89,6 +95,10 @@ class TranscriptionService {
                 }
                 
                 if result.isFinal {
+                    AppLogger.shared.logEvent(AppLogger.Events.transcriptionCompleted, parameters: [
+                        AppLogger.Params.wordCount: result.bestTranscription.segments.count
+                    ])
+                    
                     let fullTranscript = result.bestTranscription.formattedString
                     
                     // Format transcript with speaker labels if segments available

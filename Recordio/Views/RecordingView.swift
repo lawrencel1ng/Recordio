@@ -17,6 +17,9 @@ struct RecordingView: View {
     @State private var errorMessage = ""
     @State private var bookmarks: [(timestamp: TimeInterval, label: String)] = []
     @State private var showLiveTranscript = true
+    @AppStorage("largeRecordButton") private var largeRecordButton: Bool = false
+    @AppStorage("prebufferSeconds") private var prebufferSeconds: Int = 0
+    @State private var showingAdvanced = false
     
     var body: some View {
         ZStack {
@@ -24,6 +27,20 @@ struct RecordingView: View {
             
             VStack(spacing: 0) {
                 header
+                
+                if let warning = audioEngine.systemWarning {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.yellow)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .background(Color.yellow.opacity(0.1))
+                }
                 
                 if audioEngine.isRecording {
                     recordingContent
@@ -41,6 +58,11 @@ struct RecordingView: View {
         .sheet(isPresented: $showingTitleSheet) {
             TitleSheet(recordingTitle: $recordingTitle, bookmarks: bookmarks, onSave: saveRecording)
         }
+        .sheet(isPresented: $showingAdvanced) {
+            NavigationView {
+                AdvancedSettingsView()
+            }
+        }
         .alert("Recording Error", isPresented: $showingError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -50,6 +72,19 @@ struct RecordingView: View {
             if let url = notification.object as? URL {
                 showTitleSheet(for: url)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickCaptureRequested)) { _ in
+            if !audioEngine.isRecording {
+                startRecording()
+            }
+        }
+        .onAppear {
+            if prebufferSeconds > 0 {
+                try? audioEngine.startPrebuffering()
+            }
+        }
+        .onDisappear {
+            audioEngine.stopPrebuffering()
         }
     }
     
@@ -79,7 +114,7 @@ struct RecordingView: View {
                         .padding()
                 }
             } else {
-                Button(action: {}) {
+                Button(action: { showingAdvanced = true }) {
                     Image(systemName: "gearshape.fill")
                         .font(.title2)
                         .foregroundColor(.white)
@@ -88,6 +123,7 @@ struct RecordingView: View {
             }
         }
         .padding(.top)
+        .padding(.horizontal)
     }
     
     private var recordingContent: some View {
@@ -266,21 +302,22 @@ struct RecordingView: View {
                     ZStack {
                         Circle()
                             .fill(Color.red)
-                            .frame(width: 80, height: 80)
+                            .frame(width: largeRecordButton ? 110 : 80, height: largeRecordButton ? 110 : 80)
                             .shadow(color: .red.opacity(0.5), radius: 10, x: 0, y: 5)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color.white)
-                                    .frame(width: 30, height: 30)
+                                    .frame(width: largeRecordButton ? 38 : 30, height: largeRecordButton ? 38 : 30)
                             )
                     }
                 }
+                .accessibilityLabel("Stop Recording")
             } else if audioEngine.isPaused {
                 Button(action: resumeRecording) {
                     ZStack {
                         Circle()
                             .fill(Color.orange)
-                            .frame(width: 80, height: 80)
+                            .frame(width: largeRecordButton ? 110 : 80, height: largeRecordButton ? 110 : 80)
                             .shadow(color: .orange.opacity(0.5), radius: 10, x: 0, y: 5)
                             .overlay(
                                 Image(systemName: "play.fill")
@@ -289,6 +326,7 @@ struct RecordingView: View {
                             )
                     }
                 }
+                .accessibilityLabel("Resume Recording")
             } else {
                 Button(action: startRecording) {
                     ZStack {
@@ -296,10 +334,11 @@ struct RecordingView: View {
                             .fill(
                                 LinearGradient(colors: [.red, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
                             )
-                            .frame(width: 80, height: 80)
+                            .frame(width: largeRecordButton ? 110 : 80, height: largeRecordButton ? 110 : 80)
                             .shadow(color: .red.opacity(0.5), radius: 10, x: 0, y: 5)
                     }
                 }
+                .accessibilityLabel("Start Recording")
             }
             
             if audioEngine.isRecording {
@@ -307,7 +346,7 @@ struct RecordingView: View {
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.2))
-                            .frame(width: 60, height: 60)
+                            .frame(width: largeRecordButton ? 80 : 60, height: largeRecordButton ? 80 : 60)
                             .overlay(
                                 Image(systemName: "pause.fill")
                                     .font(.title3)
@@ -315,6 +354,7 @@ struct RecordingView: View {
                             )
                     }
                 }
+                .accessibilityLabel("Pause Recording")
             }
         }
     }
@@ -378,9 +418,22 @@ struct RecordingView: View {
         
         isProcessing = true
         
+        var finalURL = url
+        if audioEngine.hasPrebuffer() {
+            if let preURL = try? audioEngine.exportPrebufferToFile() {
+                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let outputPath = documentsPath.appendingPathComponent("Edited", isDirectory: true)
+                try? FileManager.default.createDirectory(at: outputPath, withIntermediateDirectories: true)
+                let mergedURL = outputPath.appendingPathComponent("Merged_\(UUID().uuidString).m4a")
+                if (try? AudioEditorService.shared.mergeAudio(recordings: [preURL, url], outputURL: mergedURL)) != nil {
+                    finalURL = mergedURL
+                }
+            }
+        }
+        
         let recording = recordingManager.createRecording(
             title: recordingTitle,
-            audioURL: url,
+            audioURL: finalURL,
             duration: audioEngine.currentDuration,
             transcript: liveTranscription.liveTranscript
         )
