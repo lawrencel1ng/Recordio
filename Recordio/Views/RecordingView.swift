@@ -82,6 +82,17 @@ struct RecordingView: View {
             if prebufferSeconds > 0 {
                 try? audioEngine.startPrebuffering()
             }
+            
+            // Auto-start if requested
+            if appState.shouldAutoStartRecording {
+                appState.shouldAutoStartRecording = false // Reset flag
+                // Small delay to allow view to appear fully
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    if !audioEngine.isRecording {
+                        startRecording()
+                    }
+                }
+            }
         }
         .onDisappear {
             audioEngine.stopPrebuffering()
@@ -447,19 +458,28 @@ struct RecordingView: View {
         bookmarks = []
         liveTranscription.reset()
         
-        if appState.canAccess(feature: .speakerDiarization) {
-            processRecording(url: url)
-        } else {
-            isProcessing = false
-            dismiss()
-        }
+        // Always process recording for diarization (runs for all tiers)
+        // This will happen in background after navigation
+        
+        // AUTO-NAVIGATION: Switch to Recordings list and select this recording
+        appState.selectedRecordingID = recording.objectID
+        appState.selectedTab = 1 // Switch to Recordings tab
+        
+        // Dismiss this view
+        dismiss()
+        
+        // Trigger processing after dismissal
+        // Trigger processing after dismissal
+        // Process on main thread (async internals) to ensure CoreData safety for the Recording object
+        processRecording(recording)
     }
     
     @AppStorage("autoEnhanceAudio") private var autoEnhanceAudio = false
     @AppStorage("autoReduceNoise") private var autoReduceNoise = false
     
-    private func processRecording(url: URL) {
+    private func processRecording(_ recording: Recording) {
         // Chain operations: Audio Processing -> Diarization -> Transcription -> Analytics
+        guard let url = recording.audioURL else { return }
         
         func runDiarizationAndTranscription(on processedURL: URL) {
             SpeakerDiarizationService.shared.processAudioFile(processedURL) { result in
@@ -469,106 +489,58 @@ struct RecordingView: View {
                         TranscriptionService.shared.transcribeAudioFile(processedURL, speakerSegments: segments) { transcriptionResult in
                             switch transcriptionResult {
                             case .success(let result):
-                                if let recording = recordingManager.recordings.first {
-                                    recordingManager.updateRecording(
-                                        recording,
-                                        speakerSegments: segments,
-                                        transcript: result.fullTranscript,
-                                        segmentTranscripts: result.segmentTranscripts
-                                    )
-                                    
-                                    // Calculate analytics from full transcript
-                                    let wordCount = AnalyticsService.shared.calculateWordCount(in: result.fullTranscript)
-                                    let fillerCount = AnalyticsService.shared.countFillerWords(in: result.fullTranscript)
-                                    recordingManager.updateAnalytics(recording, wordCount: wordCount, fillerWordCount: fillerCount)
-                                    
-                                    // Update audio URL if it changed during processing
-                                    if processedURL != url {
-                                        recording.audioURL = processedURL
-                                        try? viewContext.save()
-                                    }
-                                }
-                                isProcessing = false
-                                dismiss()
-                            case .failure:
-                                if let recording = recordingManager.recordings.first {
-                                    recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
-                                    if processedURL != url {
-                                        recording.audioURL = processedURL
-                                        try? viewContext.save()
-                                    }
-                                }
-                                isProcessing = false
-                                dismiss()
+                                recordingManager.updateRecording(
+                                    recording,
+                                    speakerSegments: segments,
+                                    transcript: result.fullTranscript,
+                                    segmentTranscripts: result.segmentTranscripts
+                                )
+                                let wc = result.fullTranscript.split(separator: " ").count
+                                AppLogger.shared.logEvent("transcription_completed", parameters: ["word_count": wc])
+                            case .failure(let error):
+                                print("Transcription error: \(error.localizedDescription)")
                             }
                         }
                     } else {
-                        if let recording = recordingManager.recordings.first {
-                            recordingManager.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
-                            if processedURL != url {
-                                recording.audioURL = processedURL
-                                try? viewContext.save()
-                            }
-                        }
-                        isProcessing = false
-                        dismiss()
+                        // Just save diarization results. Pass empty string or nil for transcript?
+                        // updateRecording expects transcript: String?, segmentTranscripts: [SegmentTranscript] = []
+                         recordingManager.updateRecording(recording, speakerSegments: segments, transcript: nil)
                     }
-                case .failure:
-                    isProcessing = false
-                    dismiss()
+                case .failure(let error):
+                    print("Diarization error: \(error.localizedDescription)")
                 }
             }
         }
         
-        // Check for audio enhancements
-        if appState.canAccess(feature: .audioEnhancement) && autoEnhanceAudio {
+        // Check for audio enhancements (Pro features)
+        if autoEnhanceAudio && appState.canAccess(feature: .audioEnhancement) {
             AudioProcessor.shared.enhanceAudio(url: url) { result in
                 switch result {
                 case .success(let enhancedURL):
-                    // If noise reduction is also on
-                    if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
-                        AudioProcessor.shared.reduceNoise(url: enhancedURL) { nrResult in
-                            switch nrResult {
-                            case .success(let finalURL):
-                                runDiarizationAndTranscription(on: finalURL)
-                            case .failure:
-                                runDiarizationAndTranscription(on: enhancedURL)
-                            }
-                        }
-                    } else {
-                        runDiarizationAndTranscription(on: enhancedURL)
-                    }
-                case .failure:
-                    // If enhance failed, try noise reduction on original
-                    if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
-                        AudioProcessor.shared.reduceNoise(url: url) { nrResult in
-                            switch nrResult {
-                            case .success(let finalURL):
-                                runDiarizationAndTranscription(on: finalURL)
-                            case .failure:
-                                runDiarizationAndTranscription(on: url)
-                            }
-                        }
-                    } else {
-                        runDiarizationAndTranscription(on: url)
-                    }
-                }
-            }
-        } else if appState.canAccess(feature: .aiNoiseReduction) && autoReduceNoise {
-            // Only noise reduction
-            AudioProcessor.shared.reduceNoise(url: url) { result in
-                switch result {
-                case .success(let finalURL):
-                    runDiarizationAndTranscription(on: finalURL)
+                    // Update recording with enhanced audio
+                    recording.audioURL = enhancedURL
+                    try? viewContext.save()
+                    runDiarizationAndTranscription(on: enhancedURL)
                 case .failure:
                     runDiarizationAndTranscription(on: url)
                 }
             }
+        } else if autoReduceNoise && appState.canAccess(feature: .aiNoiseReduction) {
+             AudioProcessor.shared.reduceNoise(url: url) { result in
+                switch result {
+                case .success(let denoisedURL):
+                    recording.audioURL = denoisedURL
+                    try? viewContext.save()
+                    runDiarizationAndTranscription(on: denoisedURL)
+                case .failure:
+                    runDiarizationAndTranscription(on: url)
+                }
+             }
         } else {
-            // No audio processing
             runDiarizationAndTranscription(on: url)
         }
     }
+
 }
 
 struct TimerDisplay: View {

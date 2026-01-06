@@ -252,4 +252,56 @@ class RecordingManager: ObservableObject {
             recording.tags?.localizedCaseInsensitiveContains(query) == true
         }
     }
+    
+    // MARK: - Batch Re-analysis
+    
+    /// Re-analyze speakers for multiple recordings
+    func batchReanalyzeSpeakers(
+        recordings: [Recording],
+        progress: @escaping (Int, Int) -> Void,
+        completion: @escaping (Int, Int) -> Void
+    ) {
+        let validRecordings = recordings.filter { $0.audioURL != nil && FileManager.default.fileExists(atPath: $0.audioURL!.path) }
+        guard !validRecordings.isEmpty else {
+            completion(0, 0)
+            return
+        }
+        
+        var successCount = 0
+        var failCount = 0
+        let total = validRecordings.count
+        
+        func processNext(index: Int) {
+            guard index < validRecordings.count else {
+                DispatchQueue.main.async {
+                    completion(successCount, failCount)
+                }
+                return
+            }
+            
+            let recording = validRecordings[index]
+            guard let url = recording.audioURL else {
+                failCount += 1
+                progress(index + 1, total)
+                processNext(index: index + 1)
+                return
+            }
+            
+            SpeakerDiarizationService.shared.processAudioFile(url, forceRefresh: true, progress: nil) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let segments):
+                        self?.updateRecording(recording, speakerSegments: segments, transcript: recording.transcript)
+                        successCount += 1
+                    case .failure:
+                        failCount += 1
+                    }
+                    progress(index + 1, total)
+                    processNext(index: index + 1)
+                }
+            }
+        }
+        
+        processNext(index: 0)
+    }
 }

@@ -2,6 +2,7 @@ import Foundation
 import CloudKit
 import CryptoKit
 import Combine
+import AVFoundation
 
 class CloudBackupService: ObservableObject {
     static let shared = CloudBackupService()
@@ -352,10 +353,30 @@ class CloudBackupService: ObservableObject {
         let encryptedData = try Data(contentsOf: fileURL)
         let decryptedData = try decryptData(encryptedData, using: key)
         
+        let existing = try? FileManager.default.contentsOfDirectory(at: recordingsPath, includingPropertiesForKeys: nil)
+        if let existing = existing {
+            let newHash = SHA256.hash(data: decryptedData)
+            let newHashString = Data(newHash).map { String(format: "%02hhx", $0) }.joined()
+            for url in existing where url.pathExtension == "wav" || url.pathExtension == "m4a" {
+                if let data = try? Data(contentsOf: url) {
+                    let h = SHA256.hash(data: data)
+                    let hs = Data(h).map { String(format: "%02hhx", $0) }.joined()
+                    if hs == newHashString {
+                        return
+                    }
+                }
+            }
+        }
+        
         let filename = record["title"] as? String ?? "Restored Recording"
         let destinationURL = recordingsPath.appendingPathComponent("\(filename)_restored.m4a")
         
         try decryptedData.write(to: destinationURL)
+        
+        let avAsset = AVAsset(url: destinationURL)
+        let duration = CMTimeGetSeconds(avAsset.duration)
+        let title = (record["title"] as? String) ?? "Restored Recording"
+        _ = RecordingManager.shared.createRecording(title: title, audioURL: destinationURL, duration: duration)
     }
     
     private func encryptData(_ data: Data, using key: SymmetricKey) throws -> Data {

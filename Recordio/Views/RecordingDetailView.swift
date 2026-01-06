@@ -24,6 +24,7 @@ struct RecordingDetailView: View {
     @State private var showingErrorAlert = false
     @State private var showingMoveSheet = false
     @State private var selectedMoveFolder: Folder?
+    @State private var diarizationProgress: Double = 0
     
     init(recording: Recording) {
         self.recording = recording
@@ -40,6 +41,23 @@ struct RecordingDetailView: View {
                 actionsView
             }
         }
+        .overlay(
+            Group {
+                if isProcessing {
+                    VStack(spacing: 12) {
+                        ProgressView(value: diarizationProgress)
+                            .progressViewStyle(LinearProgressViewStyle())
+                        Text("Analyzing speakers \(Int(diarizationProgress * 100))%")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                    .background(Color(.systemBackground).opacity(0.9))
+                    .cornerRadius(12)
+                    .shadow(radius: 8)
+                }
+            }
+        )
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -62,6 +80,10 @@ struct RecordingDetailView: View {
                     Button(action: toggleFavorite) { Label("Mark as Favorite", systemImage: "star") }
                     
                     Button(action: generateShareableLink) { Label("Generate Shareable Link", systemImage: "link") }
+                    
+                    Button(action: reanalyzeSpeakers) {
+                        Label("Re-analyze Speakers", systemImage: "person.2.fill")
+                    }
                     
                     if appState.canAccess(feature: .audioEnhancement) {
                         Button(action: enhanceAudio) { Label("Enhance Audio", systemImage: "wand.and.stars") }
@@ -231,7 +253,14 @@ struct RecordingDetailView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {
-                    SpeakerTimeline(segments: recording.speakerSegmentsArray, duration: recording.duration)
+                    SpeakerTimeline(
+                        segments: recording.speakerSegmentsArray,
+                        duration: recording.duration,
+                        currentTime: audioPlayer.currentTime,
+                        onSeek: { time in
+                            audioPlayer.seek(to: time)
+                        }
+                    )
                 }
             }
         }
@@ -625,6 +654,67 @@ struct RecordingDetailView: View {
         }
     }
     
+    
+    private func reanalyzeSpeakers() {
+        guard let url = recording.audioURL else {
+            print("❌ No audio URL for recording")
+            return
+        }
+        
+        print("🔄 Re-analyzing speakers for: \(recording.title ?? "Untitled")")
+        print("📁 Audio URL: \(url.path)")
+        print("📁 File exists: \(FileManager.default.fileExists(atPath: url.path))")
+        
+        // List files in Recordings directory to help debug
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let recordingsPath = documentsPath.appendingPathComponent("Recordings")
+        print("📂 Recordings directory: \(recordingsPath.path)")
+        
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: recordingsPath.path) {
+            print("📂 Available files (\(files.count)):")
+            for file in files.prefix(5) {
+                print("   - \(file)")
+            }
+            if files.count > 5 {
+                print("   ... and \(files.count - 5) more")
+            }
+        } else {
+            print("❌ Could not list recordings directory")
+        }
+        
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("❌ Audio file does not exist - this recording is from a previous app installation")
+            showProcessingError("Audio file not found. Please create a new recording.")
+            return
+        }
+        
+        isProcessing = true
+        diarizationProgress = 0
+        SpeakerDiarizationService.shared.processAudioFile(url, progress: { p in
+            diarizationProgress = p
+        }) { result in
+            switch result {
+            case .success(let segments):
+                print("✅ Re-analysis complete: \(segments.count) segments")
+                
+                // Update the recording with new segments
+                DispatchQueue.main.async {
+                    RecordingManager.shared.updateRecording(
+                        self.recording,
+                        speakerSegments: segments,
+                        transcript: self.recording.transcript
+                    )
+                    isProcessing = false
+                }
+                
+            case .failure(let error):
+                print("❌ Re-analysis failed: \(error.localizedDescription)")
+                showProcessingError("Failed to re-analyze speakers: \(error.localizedDescription)")
+                isProcessing = false
+            }
+        }
+    }
+    
     private func showExportOptions() {
         showingExportSheet = true
     }
@@ -806,24 +896,78 @@ struct WaveformVisualization: View {
 struct SpeakerTimeline: View {
     let segments: [SpeakerSegment]
     let duration: Double
+    var currentTime: Double = 0
+    var onSeek: ((Double) -> Void)? = nil
+    
+    @StateObject private var labelManager = SpeakerLabelManager.shared
+    @State private var hoveredSegment: SpeakerSegment? = nil
     
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 1) {
-                ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-                    let width = (segment.endTime - segment.startTime) / duration * geometry.size.width
-                    Rectangle()
-                        .fill(speakerColor(for: segment.speakerId))
-                        .frame(width: max(2, width))
+        VStack(spacing: 8) {
+            // Timeline bar with playback indicator
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Segments
+                    HStack(spacing: 1) {
+                        ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
+                            let width = (segment.endTime - segment.startTime) / duration * geometry.size.width
+                            Rectangle()
+                                .fill(speakerColor(for: segment.speakerId).opacity(opacityForConfidence(segment.confidence)))
+                                .frame(width: max(2, width))
+                                .onTapGesture {
+                                    onSeek?(segment.startTime)
+                                }
+                        }
+                    }
+                    
+                    // Playback position indicator
+                    if duration > 0 {
+                        let position = currentTime / duration * geometry.size.width
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 2, height: 36)
+                            .shadow(color: .black.opacity(0.3), radius: 2)
+                            .offset(x: position)
+                    }
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            let ratio = value.location.x / geometry.size.width
+                            let seekTime = ratio * duration
+                            onSeek?(max(0, min(duration, seekTime)))
+                        }
+                )
+            }
+            .frame(height: 36)
+            .cornerRadius(8)
+            
+            // Speaker legend
+            HStack(spacing: 12) {
+                ForEach(uniqueSpeakerIds, id: \.self) { speakerId in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(speakerColor(for: speakerId))
+                            .frame(width: 8, height: 8)
+                        Text(labelManager.getName(for: Int(speakerId)))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }
-        .frame(height: 30)
-        .cornerRadius(6)
+    }
+    
+    private var uniqueSpeakerIds: [Int16] {
+        Array(Set(segments.map { $0.speakerId })).sorted()
+    }
+    
+    private func opacityForConfidence(_ confidence: Double) -> Double {
+        return 0.5 + (confidence * 0.5)  // Range: 0.5 - 1.0
     }
     
     private func speakerColor(for speakerId: Int16) -> Color {
-        let colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"]
+        let colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
         let hex = colors[Int(speakerId) % colors.count]
         return Color(hex: hex) ?? .blue
     }
@@ -831,24 +975,57 @@ struct SpeakerTimeline: View {
 
 struct SpeakerBadge: View {
     let speakerId: Int16
+    var onTap: (() -> Void)? = nil
+    
+    @StateObject private var labelManager = SpeakerLabelManager.shared
+    @State private var showingEditAlert = false
+    @State private var editedName = ""
     
     var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(speakerColor)
-                .frame(width: 8, height: 8)
-            
-            Text("Speaker \(speakerId + 1)")
-                .font(.caption)
+        Button(action: {
+            if let onTap = onTap {
+                onTap()
+            } else {
+                editedName = labelManager.getName(for: Int(speakerId))
+                showingEditAlert = true
+            }
+        }) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(speakerColor)
+                    .frame(width: 8, height: 8)
+                
+                Text(labelManager.getName(for: Int(speakerId)))
+                    .font(.caption)
+                
+                if labelManager.hasCustomName(for: Int(speakerId)) {
+                    Image(systemName: "pencil.circle.fill")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(speakerColor.opacity(0.1))
+            .cornerRadius(12)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(speakerColor.opacity(0.1))
-        .cornerRadius(12)
+        .buttonStyle(.plain)
+        .alert("Edit Speaker Name", isPresented: $showingEditAlert) {
+            TextField("Name", text: $editedName)
+            Button("Save") {
+                labelManager.setName(editedName, for: Int(speakerId))
+            }
+            Button("Reset to Default", role: .destructive) {
+                labelManager.removeName(for: Int(speakerId))
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter a name for this speaker")
+        }
     }
     
     private var speakerColor: Color {
-        let colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"]
+        let colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F"]
         let hex = colors[Int(speakerId) % colors.count]
         return Color(hex: hex) ?? .blue
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreData
 
 struct RecordingsListView: View {
     @StateObject private var recordingManager = RecordingManager.shared
@@ -11,6 +12,9 @@ struct RecordingsListView: View {
     @State private var showingUpgradePrompt = false
     @State private var upgradePromptType: UpgradePromptType?
     @State private var savedSearches: [String] = []
+    
+    // Auto-navigation state
+    @State private var navigationSelection: NSManagedObjectID?
     
     enum UpgradePromptType: Identifiable {
         case speaker
@@ -57,6 +61,25 @@ struct RecordingsListView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // Programmatic Navigation Link (Hidden)
+                // We use a ZStack to ensure it's in hierarchy but invisible
+                // Iterating all recordings is expensive if list is long? 
+                // But we need to link to specific recording.
+                // Alternative: Just push a DetailView if selection is non-nil?
+                // But NavigationLink needs destination.
+                // We'll use a single link that acts as a router.
+                if let selectedID = appState.selectedRecordingID, 
+                   let recording = recordingManager.recordings.first(where: { $0.objectID == selectedID }) {
+                    NavigationLink(
+                        destination: RecordingDetailView(recording: recording),
+                        tag: selectedID,
+                        selection: $appState.selectedRecordingID
+                    ) {
+                        EmptyView()
+                    }
+                    .hidden()
+                }
+
                 if searchText.isEmpty {
                     smartFoldersScrollView
                     Divider()
@@ -74,6 +97,13 @@ struct RecordingsListView: View {
             .searchable(text: $searchText, prompt: "Search recordings, transcripts, tags...")
             .onChange(of: searchText) { newValue in
                 performSearch(query: newValue)
+            }
+            .onChange(of: appState.selectedRecordingID) { newID in
+                if newID != nil {
+                    // Reset filters so the new recording is likely visible/findable context
+                    searchText = ""
+                    selectedSmartFolder = .all
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {

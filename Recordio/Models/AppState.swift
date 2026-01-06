@@ -18,6 +18,11 @@ class AppState: ObservableObject {
     @Published var lastProPromptDate: Date?
     @Published var lastLifetimePromptDate: Date?
     
+    // MARK: - Navigation State
+    @Published var selectedTab: Int = 0
+    @Published var selectedRecordingID: NSManagedObjectID?
+    @Published var shouldAutoStartRecording: Bool = false
+    
     private let userDefaults = UserDefaults.standard
     
     private init() {
@@ -68,7 +73,7 @@ class AppState: ObservableObject {
     func canAccess(feature: Feature) -> Bool {
         switch feature {
         case .speakerDiarization:
-            return currentTier != .free
+            return true  // Diarization runs for all users; display is gated at UI level
         case .aiNoiseReduction:
             return currentTier == .pro || currentTier == .lifetime
         case .aiSummaries:

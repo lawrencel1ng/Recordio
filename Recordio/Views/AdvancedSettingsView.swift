@@ -7,10 +7,6 @@ struct AdvancedSettingsView: View {
     @AppStorage("enableTimestamps") private var enableTimestamps = true
     @AppStorage("noiseGateThreshold") private var noiseGateThreshold = 0.02
     @AppStorage("compressionRatio") private var compressionRatio = 4.0
-    @AppStorage("advancedDiarizationEnabled") private var advancedDiarizationEnabled = false
-    @State private var isDownloadingPack = false
-    @State private var downloadError: String?
-    @State private var isPackInstalled = false
     
     let languages = [
         ("en-US", "English (US)"),
@@ -26,44 +22,6 @@ struct AdvancedSettingsView: View {
     
     var body: some View {
         Form {
-            if appState.canAccess(feature: .advancedSpeakerDiarization) {
-                Section {
-                    Toggle("Advanced Speaker Separation", isOn: $advancedDiarizationEnabled)
-                        .disabled(!isPackInstalled)
-                    HStack {
-                        Button("Download Advanced Speaker Pack") {
-                            isDownloadingPack = true
-                            SpeakerDiarizationService.shared.downloadAdvancedPack { result in
-                                isDownloadingPack = false
-                                if case .failure(let error) = result {
-                                    downloadError = error.localizedDescription
-                                } else {
-                                    isPackInstalled = SpeakerDiarizationService.shared.isAdvancedPackInstalled()
-                                }
-                            }
-                        }
-                        .disabled(isDownloadingPack)
-                        if isDownloadingPack {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        }
-                        Spacer()
-                        Text(isPackInstalled ? "Installed" : "Not installed")
-                            .foregroundColor(isPackInstalled ? .green : .secondary)
-                        if let downloadError {
-                            Text(downloadError)
-                                .font(.caption)
-                                .foregroundColor(.red)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                } header: {
-                    Text("Premium+ Features")
-                } footer: {
-                    Text("Improves diarization and speaker-aware transcription accuracy")
-                }
-            }
             Section {
                 Picker("Transcription Language", selection: $transcriptionLanguage) {
                     ForEach(languages, id: \.0) { code, name in
@@ -140,9 +98,6 @@ struct AdvancedSettingsView: View {
         }
         .navigationTitle("Advanced")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            isPackInstalled = SpeakerDiarizationService.shared.isAdvancedPackInstalled()
-        }
     }
 }
 

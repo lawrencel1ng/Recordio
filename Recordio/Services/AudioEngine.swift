@@ -350,10 +350,15 @@ class AudioEngine: NSObject, ObservableObject {
         isPrebuffering = false
         prebufferSamples = []
         
-        if !partURLs.isEmpty, let finalURL = mergePartsIfNeeded() {
-            currentRecordingURL = finalURL
-            NotificationCenter.default.post(name: .recordingDidFinish, object: finalURL)
+        // Merge parts if we have multi-part recording
+        if !partURLs.isEmpty {
+            if let finalURL = mergePartsIfNeeded() {
+                currentRecordingURL = finalURL
+            }
         }
+        
+        // Always post notification with the final URL (handles both single and multi-part recordings)
+        NotificationCenter.default.post(name: .recordingDidFinish, object: currentRecordingURL)
         
         // Reset recorder for next recording
         audioRecorder = nil
@@ -473,10 +478,10 @@ class AudioEngine: NSObject, ObservableObject {
 
 extension AudioEngine: AVAudioRecorderDelegate {
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            if flag {
-                NotificationCenter.default.post(name: .recordingDidFinish, object: self?.currentRecordingURL)
-            }
+        // Notification is now posted from stopRecording() to ensure synchronous behavior
+        // This delegate is kept for logging/error handling only
+        if !flag {
+            print("Recording did not finish successfully")
         }
     }
     

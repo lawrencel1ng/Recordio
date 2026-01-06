@@ -11,6 +11,18 @@ struct RecordioApp: App {
     init() {
         AppLogger.shared.configure()
         AppLogger.shared.logEvent(AppLogger.Events.appLaunch)
+        UserDefaults.standard.set(true, forKey: "advancedDiarizationEnabled")
+        SpeakerDiarizationService.shared.ensureAdvancedPackInstalled()
+        SpeakerDiarizationService.shared.loadEmbeddedModels()
+        Task {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let recordingsPath = documentsPath.appendingPathComponent("Recordings", isDirectory: true)
+            try? FileManager.default.createDirectory(at: recordingsPath, withIntermediateDirectories: true)
+            await CloudBackupService.shared.refreshAvailability()
+            if CloudBackupService.shared.isBackupEnabled {
+                try? await CloudBackupService.shared.restoreFromBackup()
+            }
+        }
     }
     
     var body: some Scene {
